@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "EV Charge Driver",
+    "slug": "ev-charge-driver",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "scheme": "evcharge",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.evcharge.driver"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.evcharge.driver"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

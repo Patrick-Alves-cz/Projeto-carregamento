@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  DRIVER
+  OPERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum CompanyMemberRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum StationStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum ChargerStatus {
+  ONLINE
+  OFFLINE
+  FAULTED
+}
+
+enum ConnectorType {
+  TYPE2
+  CCS2
+  CHADEMO
+  J1772
+  NACS
+}
+
+enum ConnectorStatus {
+  AVAILABLE
+  OCCUPIED
+  UNAVAILABLE
+  FAULTED
+}
+
+// ─── Users & Profiles ──────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  role         UserRole   @default(DRIVER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  profile        Profile?
+  companyMembers CompanyMember[]
+  vehicles       Vehicle[]
+
+  @@map("users")
+}
+
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String   @unique @map("user_id")
+  fullName  String   @map("full_name")
+  phone     String?
+  avatarUrl String?  @map("avatar_url")
+  document  String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+// ─── Multi-tenant ────────────────────────────────────────────────────────────
+
+model Company {
+  id        String        @id @default(cuid())
+  name      String
+  slug      String        @unique
+  cnpj      String?       @unique
+  status    CompanyStatus @default(ACTIVE)
+  settings  Json          @default("{}")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  members  CompanyMember[]
+  stations Station[]
+
+  @@map("companies")
+}
+
+model CompanyMember {
+  id        String            @id @default(cuid())
+  companyId String            @map("company_id")
+  userId    String            @map("user_id")
+  role      CompanyMemberRole @default(OPERATOR)
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@map("company_members")
+}
+
+// ─── Driver fleet ────────────────────────────────────────────────────────────
+
+model Vehicle {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  brand          String
+  model          String
+  year           Int?
+  batteryKwh     Decimal? @map("battery_kwh") @db.Decimal(10, 2)
+  connectorTypes ConnectorType[] @map("connector_types")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vehicles")
+}
+
+// ─── Infrastructure ──────────────────────────────────────────────────────────
+
+model Station {
+  id        String        @id @default(cuid())
+  companyId String        @map("company_id")
+  name      String
+  address   String
+  latitude  Decimal       @db.Decimal(10, 7)
+  longitude Decimal       @db.Decimal(10, 7)
+  status    StationStatus @default(ACTIVE)
+  amenities String[]      @default([])
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  chargers Charger[]
+
+  @@index([companyId, status])
+  @@map("stations")
+}
+
+model Charger {
+  id           String        @id @default(cuid())
+  stationId    String        @map("station_id")
+  serialNumber String        @unique @map("serial_number")
+  model        String?
+  maxPowerKw   Decimal       @map("max_power_kw") @db.Decimal(10, 2)
+  status       ChargerStatus @default(OFFLINE)
+  providerId   String?       @map("provider_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  station    Station     @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connectors Connector[]
+
+  @@index([stationId, status])
+  @@map("chargers")
+}
+
+model Connector {
+  id         String          @id @default(cuid())
+  chargerId  String          @map("charger_id")
+  number     Int
+  type       ConnectorType
+  maxPowerKw Decimal         @map("max_power_kw") @db.Decimal(10, 2)
+  status     ConnectorStatus @default(UNAVAILABLE)
+  createdAt  DateTime        @default(now()) @map("created_at")
+  updatedAt  DateTime        @updatedAt @map("updated_at")
+
+  charger Charger @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+
+  @@unique([chargerId, number])
+  @@index([chargerId, status])
+  @@map("connectors")
+}
