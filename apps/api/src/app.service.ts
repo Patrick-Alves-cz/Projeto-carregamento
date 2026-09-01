@@ -7,7 +7,7 @@ export class AppService {
     return {
       name: APP_NAME,
       version: "0.0.0",
-      phase: "foundation",
+      phase: "phase-1",
     };
   }
 }

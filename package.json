@@ -12,7 +12,8 @@
     "db:generate": "pnpm --filter @evcharge/database generate",
     "db:migrate": "pnpm --filter @evcharge/database migrate",
     "db:push": "pnpm --filter @evcharge/database push",
-    "db:studio": "pnpm --filter @evcharge/database studio"
+    "db:studio": "pnpm --filter @evcharge/database studio",
+    "db:seed": "pnpm --filter @evcharge/database seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",

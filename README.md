@@ -65,10 +65,11 @@ No [Supabase Dashboard](https://supabase.com/dashboard), acesse **Project Settin
 | `pnpm build` | Build de todos os pacotes e apps |
 | `pnpm lint` | ESLint em todo o monorepo |
 | `pnpm typecheck` | Verificação de tipos TypeScript |
-| `pnpm test` | Testes unitários |
+| `pnpm test` | Testes unitários e E2E (API) |
 | `pnpm db:generate` | Gera Prisma Client |
 | `pnpm db:push` | Aplica schema ao banco Supabase |
 | `pnpm db:migrate` | Cria/aplica migrations |
+| `pnpm db:seed` | Popula dados demo (idempotente) |
 | `pnpm db:studio` | Abre Prisma Studio |
 
 ## Apps
@@ -120,13 +121,61 @@ DATABASE_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=publ
 DIRECT_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
 ```
 
-## Endpoints (Fase 0)
+## Endpoints (Fase 1)
 
-- `GET /api` — Informações da API
+Documentação interativa: **http://localhost:3001/api/docs**
+
+### Auth
+- `POST /api/auth/register` — Registro (driver ou operator/admin com empresa)
+- `POST /api/auth/login` — Login
+- `POST /api/auth/refresh` — Renovar access token (rotação de refresh token)
+- `POST /api/auth/logout` — Revogar refresh token
+- `GET /api/auth/me` — Usuário autenticado
+
+### Users
+- `GET /api/users/me` — Perfil do usuário
+- `PATCH /api/users/me` — Atualizar perfil
+
+### Companies
+- `GET /api/companies/:id` — Detalhe da empresa (isolamento multi-tenant)
+- `POST /api/companies` — Criar empresa (super_admin)
+- `PATCH /api/companies/:id` — Atualizar empresa (admin+)
+
+### Vehicles
+- `GET/POST /api/vehicles` — CRUD de veículos (driver: apenas próprios)
+
+### Stations / Chargers / Connectors
+- CRUD completo com filtros geo/status em stations
+- Operadores restritos à própria empresa
+
+### Health
 - `GET /api/health` — Health check (inclui status do banco)
+
+## Roles
+
+| Role | Escopo |
+|---|---|
+| `driver` | Próprios dados e veículos; leitura de infraestrutura |
+| `operator` | Dados da empresa |
+| `admin` | Administração da empresa |
+| `super_admin` | Acesso global |
+
+## Dados demo (`pnpm db:seed`)
+
+Senha de todos os usuários demo: `Demo@12345`
+
+| Usuário | Email |
+|---|---|
+| Super admin | `superadmin@evcharge.demo` |
+| Operador SP | `operator.sp@evcharge.demo` |
+| Operador RJ | `operator.rj@evcharge.demo` |
+| Admin SP | `admin.sp@evcharge.demo` |
+| Motoristas | `driver1@evcharge.demo` … `driver5@evcharge.demo` |
+
+Empresas: `evcharge-sp`, `evcharge-rj` — 5 estações, 15 carregadores, 15+ conectores.
 
 ## Fase atual
 
-**Fase 0 — Fundação**: monorepo, banco Supabase, apps mínimos funcionais.
+**Fase 1 — Core operacional**: autenticação JWT, RBAC, multi-tenant, CRUD de entidades, seed demo, Swagger, testes E2E, admin/driver com login mínimo.
 
-Próxima fase: autenticação, CRUD de entidades, seed de dados demo.
+Próxima fase: sessões de recarga, OCPP, pagamentos.

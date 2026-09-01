@@ -8,7 +8,10 @@ export default function HomePage() {
         <p className="text-muted-foreground text-sm">Painel administrativo — Fase 0</p>
         <div className="rounded-lg border p-4 text-left text-sm">
           <p className="font-medium">Status</p>
-          <p className="text-muted-foreground mt-1">Fundação do monorepo configurada.</p>
+          <p className="text-muted-foreground mt-1">Fase 1 — acesse o painel administrativo.</p>
+          <a href="/login" className="mt-3 inline-block text-sm underline">
+            Ir para login
+          </a>
         </div>
       </div>
     </main>

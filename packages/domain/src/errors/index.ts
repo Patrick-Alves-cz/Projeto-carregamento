@@ -28,3 +28,24 @@ export class TenantIsolationError extends DomainError {
     this.name = "TenantIsolationError";
   }
 }
+
+export class UnauthorizedError extends DomainError {
+  constructor(message = "Unauthorized") {
+    super(message, "UNAUTHORIZED");
+    this.name = "UnauthorizedError";
+  }
+}
+
+export class ForbiddenError extends DomainError {
+  constructor(message = "Forbidden") {
+    super(message, "FORBIDDEN");
+    this.name = "ForbiddenError";
+  }
+}
+
+export class ConflictError extends DomainError {
+  constructor(message = "Conflict") {
+    super(message, "CONFLICT");
+    this.name = "ConflictError";
+  }
+}

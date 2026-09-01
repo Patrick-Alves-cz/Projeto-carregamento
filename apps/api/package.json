@@ -8,7 +8,7 @@
     "start": "node dist/main.js",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "nest build && node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
     "@evcharge/charger-provider": "workspace:*",
@@ -17,15 +17,28 @@
     "@evcharge/shared": "workspace:*",
     "@nestjs/common": "^11.1.3",
     "@nestjs/core": "^11.1.3",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.1.3",
+    "@nestjs/swagger": "^11.2.0",
+    "@nestjs/throttler": "^6.4.0",
+    "bcrypt": "^6.0.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.3",
     "@nestjs/schematics": "^11.0.3",
+    "@nestjs/testing": "^11.1.3",
+    "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.2",
     "@types/node": "^22.15.29",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/supertest": "^6.0.3",
+    "dotenv": "^16.5.0",
+    "supertest": "^7.1.1",
     "tsx": "^4.19.4"
   }
 }

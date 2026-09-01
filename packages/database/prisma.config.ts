@@ -6,9 +6,17 @@ import { defineConfig } from "prisma/config";
 config({ path: resolve(__dirname, "../../.env") });
 config({ path: resolve(__dirname, ".env"), override: true });
 
+if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
+  process.env.DIRECT_URL = process.env.DATABASE_URL.replace(
+    "?pgbouncer=true",
+    "",
+  );
+}
+
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    seed: "tsx prisma/seed.ts",
   },
 });
