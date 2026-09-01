@@ -23,14 +23,12 @@
     "push": "prisma db push",
     "studio": "prisma studio"
   },
-  "prisma": {
-    "schema": "prisma/schema.prisma"
-  },
   "dependencies": {
     "@prisma/client": "^6.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
+    "dotenv": "^16.5.0",
     "prisma": "^6.9.0",
     "tsx": "^4.19.4"
   }

@@ -12,6 +12,11 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
   path.resolve(workspaceRoot, "node_modules"),
 ];
-config.resolver.disableHierarchicalLookup = true;
+
+// Ensure a single React instance across the monorepo (required for Expo Web SSR).
+config.resolver.extraNodeModules = {
+  react: path.resolve(workspaceRoot, "node_modules/react"),
+  "react-dom": path.resolve(workspaceRoot, "node_modules/react-dom"),
+};
 
 module.exports = config;

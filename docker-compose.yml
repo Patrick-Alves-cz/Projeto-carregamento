@@ -1,3 +1,8 @@
+# Optional local PostgreSQL for development or CI.
+# Production and default local dev use Supabase — Docker is NOT required.
+#
+# Usage: docker compose up -d
+
 services:
   postgres:
     image: postgres:16-alpine

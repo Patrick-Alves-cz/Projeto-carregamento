@@ -10,15 +10,17 @@ Plataforma de gerenciamento e recarga de veículos elétricos.
 | API | NestJS + TypeScript |
 | Admin | Next.js + shadcn/ui |
 | Driver | React Native + Expo + Expo Router |
-| Banco | PostgreSQL + Prisma |
+| Banco | PostgreSQL (Supabase) + Prisma |
 | Shared | TypeScript + Zod |
-| Infra | Docker Compose |
+| Infra local opcional | Docker Compose |
 
 ## Pré-requisitos
 
 - Node.js >= 20
 - pnpm >= 9
-- Docker e Docker Compose
+- Projeto Supabase com PostgreSQL habilitado
+
+> Docker é **opcional** — serve apenas para rodar PostgreSQL localmente. O fluxo padrão usa Supabase.
 
 ## Instalação
 
@@ -30,16 +32,30 @@ pnpm install
 cp .env.example .env
 cp packages/database/.env.example packages/database/.env
 
-# 3. Subir PostgreSQL
-docker compose up -d
+# 3. Preencher DATABASE_URL e DIRECT_URL com as credenciais do Supabase
+#    Dashboard → Project Settings → Database → Connection string
 
-# 4. Gerar client Prisma e aplicar schema
+# 4. Gerar Prisma Client e aplicar schema
 pnpm db:generate
 pnpm db:push
 
 # 5. Iniciar todos os apps em modo desenvolvimento
 pnpm dev
 ```
+
+## Configuração Supabase
+
+No [Supabase Dashboard](https://supabase.com/dashboard), acesse **Project Settings → Database** e copie:
+
+| Variável | Uso | Porta |
+|---|---|---|
+| `DATABASE_URL` | Prisma Client / API (Transaction Pooler) | 6543 |
+| `DIRECT_URL` | Prisma CLI (`db push`, `migrate`, `studio`) | 5432 |
+
+**Importante:**
+- `DATABASE_URL` deve incluir `?pgbouncer=true` quando usar o pooler
+- `DIRECT_URL` usa conexão direta — necessária para migrations
+- Nunca commite URLs ou senhas reais no repositório
 
 ## Scripts
 
@@ -51,7 +67,7 @@ pnpm dev
 | `pnpm typecheck` | Verificação de tipos TypeScript |
 | `pnpm test` | Testes unitários |
 | `pnpm db:generate` | Gera Prisma Client |
-| `pnpm db:push` | Aplica schema ao banco |
+| `pnpm db:push` | Aplica schema ao banco Supabase |
 | `pnpm db:migrate` | Cria/aplica migrations |
 | `pnpm db:studio` | Abre Prisma Studio |
 
@@ -61,8 +77,16 @@ pnpm dev
 |---|---|---|
 | API (NestJS) | 3001 | http://localhost:3001/api |
 | Admin (Next.js) | 3000 | http://localhost:3000 |
-| Driver (Expo) | 8081 | Expo DevTools |
+| Driver (Expo) | 8081 | http://localhost:8081 (web) |
 | Charger Simulator | — | Processo standalone |
+
+### Driver (Expo)
+
+```bash
+pnpm --filter @evcharge/driver dev
+```
+
+Pressione `w` no terminal do Expo para abrir a versão web em http://localhost:8081.
 
 ## Estrutura
 
@@ -81,6 +105,21 @@ packages/
   ui/                   # Componentes UI compartilhados
 ```
 
+## Docker (opcional)
+
+Para desenvolvimento offline com PostgreSQL local:
+
+```bash
+docker compose up -d
+```
+
+Configure `.env` com URLs locais:
+
+```
+DATABASE_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
+DIRECT_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
+```
+
 ## Endpoints (Fase 0)
 
 - `GET /api` — Informações da API
@@ -88,6 +127,6 @@ packages/
 
 ## Fase atual
 
-**Fase 0 — Fundação**: monorepo, banco, apps mínimos funcionais.
+**Fase 0 — Fundação**: monorepo, banco Supabase, apps mínimos funcionais.
 
 Próxima fase: autenticação, CRUD de entidades, seed de dados demo.
