@@ -2,6 +2,12 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Zap } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { login } from "@/lib/api-client";
 
 export default function LoginPage() {
@@ -19,41 +25,65 @@ export default function LoginPage() {
       await login(email, password);
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Não foi possível entrar");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-lg border p-6">
-        <h1 className="text-xl font-semibold">Admin Login</h1>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <input
-          className="w-full rounded border px-3 py-2 text-sm"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-          required
-        />
-        <input
-          className="w-full rounded border px-3 py-2 text-sm"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Senha"
-          required
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50"
-        >
-          {loading ? "Entrando..." : "Entrar"}
-        </button>
-      </form>
+    <main className="relative flex min-h-svh items-center justify-center overflow-hidden p-6">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,oklch(0.35_0.08_160_/_0.25),transparent_55%)]" />
+      <Card className="relative w-full max-w-sm">
+        <CardHeader className="space-y-4">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Zap className="size-5" />
+          </div>
+          <div>
+            <CardTitle className="text-xl">Entrar no painel</CardTitle>
+            <CardDescription className="mt-1">
+              Operação da rede de recarga — versão beta
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error ? (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            <div className="space-y-2">
+              <Label htmlFor="email">E-mail</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Senha</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Entrando…" : "Entrar"}
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Demo: admin.sp@evcharge.demo / Demo@12345
+            </p>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }
