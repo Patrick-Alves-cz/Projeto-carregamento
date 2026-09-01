@@ -8,6 +8,18 @@ async function bootstrap() {
 
   app.setGlobalPrefix("api");
 
+  app.enableCors({
+    origin: [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://localhost:8081",
+      "http://127.0.0.1:8081",
+    ],
+    credentials: true,
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  });
+
   const config = new DocumentBuilder()
     .setTitle("EV Charge Platform API")
     .setDescription("API da plataforma de recarga de veículos elétricos")
