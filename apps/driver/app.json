@@ -5,7 +5,7 @@
     "version": "0.0.0",
     "orientation": "portrait",
     "scheme": "evcharge",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,

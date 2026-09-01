@@ -1,6 +1,9 @@
 import { Stack, useRouter, useSegments } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
+import { View } from "react-native";
 import { getStoredTokens } from "../lib/api-client";
+import { colors } from "../lib/theme";
 
 export default function RootLayout() {
   const router = useRouter();
@@ -10,24 +13,30 @@ export default function RootLayout() {
   useEffect(() => {
     async function checkAuth() {
       const tokens = await getStoredTokens();
-      const inAuthGroup = segments[0] === "(app)";
-
-      if (!tokens && inAuthGroup) {
-        router.replace("/login");
-      } else if (tokens && segments[0] === "login") {
-        router.replace("/(app)");
-      }
+      const inApp = segments[0] === "(app)";
+      if (!tokens && inApp) router.replace("/login");
+      else if (tokens && segments[0] === "login") router.replace("/(app)/(tabs)");
       setReady(true);
     }
-    checkAuth();
+    void checkAuth();
   }, [segments, router]);
 
-  if (!ready) return null;
+  if (!ready) {
+    return <View style={{ backgroundColor: colors.bg, flex: 1 }} />;
+  }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="login" />
-      <Stack.Screen name="(app)" />
-    </Stack>
+    <View style={{ backgroundColor: colors.bg, flex: 1 }}>
+      <StatusBar style="light" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.bg },
+        }}
+      >
+        <Stack.Screen name="login" />
+        <Stack.Screen name="(app)" />
+      </Stack>
+    </View>
   );
 }
