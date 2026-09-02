@@ -1,5 +1,5 @@
 import { Text, View, StyleSheet } from "react-native";
-import { colors, radius } from "../lib/theme";
+import { radius } from "../lib/theme";
 
 export function StatusChip({ label, color }: { label: string; color: string }) {
   return (
