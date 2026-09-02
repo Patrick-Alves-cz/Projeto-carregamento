@@ -8,7 +8,7 @@
     "start": "node dist/main.js",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "nest build && node --import tsx --test test/**/*.test.ts"
+    "test": "nest build && node --import tsx --import ./test/preload-env.mjs --test test/**/*.test.ts"
   },
   "dependencies": {
     "@evcharge/charger-provider": "workspace:*",
