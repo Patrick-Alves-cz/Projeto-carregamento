@@ -121,7 +121,9 @@ DATABASE_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=publ
 DIRECT_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
 ```
 
-## Endpoints (Fase 1)
+## Endpoints (Fase 2)
+
+Documentação interativa: **http://localhost:3001/api/docs**
 
 Documentação interativa: **http://localhost:3001/api/docs**
 
@@ -151,6 +153,17 @@ Documentação interativa: **http://localhost:3001/api/docs**
 ### Health
 - `GET /api/health` — Health check (inclui status do banco)
 
+### Sessions (Fase 2)
+- `POST /api/sessions/start` — Iniciar recarga (`connectorId`, `vehicleId`)
+- `POST /api/sessions/:id/stop` — Encerrar recarga
+- `POST /api/sessions/:id/pause` — Pausar
+- `POST /api/sessions/:id/resume` — Retomar
+- `GET /api/sessions` — Histórico (filtros por status/estação/período)
+- `GET /api/sessions/:id` — Detalhe da sessão
+- `GET /api/sessions/active/live` — Sessões ativas (operador)
+
+WebSocket: `ws://localhost:3001/realtime` (JWT no `auth.token`)
+
 ## Roles
 
 | Role | Escopo |
@@ -173,9 +186,22 @@ Senha de todos os usuários demo: `Demo@12345`
 | Motoristas | `driver1@evcharge.demo` … `driver5@evcharge.demo` |
 
 Empresas: `evcharge-sp`, `evcharge-rj` — 5 estações, 15 carregadores, 15+ conectores.
+Wallets demo: R$ 100,00 por motorista. Tarifas: R$ 1,89/kWh (SP), R$ 1,75/kWh (RJ).
+
+## Simulador
+
+A recarga ao vivo é simulada pelo `MockChargerProvider` **dentro da API**.
+
+O processo standalone serve para observar carregadores virtuais:
+
+```bash
+pnpm simulator
+# ou com cenário
+pnpm --filter @evcharge/charger-simulator dev -- --scenario FAST --meter-interval 2000
+```
 
 ## Fase atual
 
-**Fase 1 — Core operacional**: autenticação JWT, RBAC, multi-tenant, CRUD de entidades, seed demo, Swagger, testes E2E, admin/driver com login mínimo.
+**Fase 2 — Simulação completa de recarga**: sessões, telemetria, wallet DEMO, WebSocket, admin operacional e tela de recarga no Driver.
 
-Próxima fase: sessões de recarga, OCPP, pagamentos.
+Próxima fase: OCPP real (1.6 / 2.0.1 / 2.1) e gateway de pagamento.

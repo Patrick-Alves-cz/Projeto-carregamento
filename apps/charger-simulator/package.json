@@ -11,7 +11,10 @@
     "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@evcharge/charger-provider": "workspace:*"
+    "@evcharge/charger-provider": "workspace:*",
+    "@evcharge/database": "workspace:*",
+    "@prisma/client": "^6.9.0",
+    "dotenv": "^16.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

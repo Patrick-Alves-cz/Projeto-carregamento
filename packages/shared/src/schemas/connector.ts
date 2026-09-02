@@ -11,7 +11,17 @@ export const createConnectorSchema = z.object({
 export const updateConnectorSchema = z.object({
   type: z.enum(CONNECTOR_TYPES).optional(),
   maxPowerKw: z.number().positive().optional(),
-  status: z.enum(["AVAILABLE", "OCCUPIED", "UNAVAILABLE", "FAULTED"]).optional(),
+  status: z
+    .enum([
+      "AVAILABLE",
+      "PREPARING",
+      "CHARGING",
+      "SUSPENDED",
+      "FINISHING",
+      "UNAVAILABLE",
+      "FAULTED",
+    ])
+    .optional(),
 });
 
 export type CreateConnectorInput = z.infer<typeof createConnectorSchema>;

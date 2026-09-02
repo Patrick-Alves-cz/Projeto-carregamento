@@ -13,6 +13,7 @@ export default function AppLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="station/[id]" options={{ title: "Estação" }} />
+      <Stack.Screen name="charging/[sessionId]" options={{ title: "Recarga" }} />
     </Stack>
   );
 }

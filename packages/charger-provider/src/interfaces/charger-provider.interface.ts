@@ -1,7 +1,7 @@
 import type {
   ChargerDiagnostics,
   ChargerStatusInfo,
-  ConnectorAvailabilityStatus,
+  ConnectorOperationalStatus,
   MeterReading,
 } from "../types";
 
@@ -19,7 +19,7 @@ export interface ChargerProvider {
   setAvailability(
     chargerId: string,
     connectorId: number,
-    status: ConnectorAvailabilityStatus,
+    status: ConnectorOperationalStatus,
   ): Promise<void>;
   restart(chargerId: string): Promise<void>;
   getDiagnostics(chargerId: string): Promise<ChargerDiagnostics>;

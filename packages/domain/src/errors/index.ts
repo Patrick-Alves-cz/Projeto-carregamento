@@ -49,3 +49,24 @@ export class ConflictError extends DomainError {
     this.name = "ConflictError";
   }
 }
+
+export class ConnectorUnavailableError extends DomainError {
+  constructor(message = "Connector is not available for charging") {
+    super(message, "CONNECTOR_UNAVAILABLE");
+    this.name = "ConnectorUnavailableError";
+  }
+}
+
+export class SessionStateError extends DomainError {
+  constructor(message: string) {
+    super(message, "SESSION_STATE_ERROR");
+    this.name = "SessionStateError";
+  }
+}
+
+export class InsufficientBalanceError extends DomainError {
+  constructor(message = "Insufficient wallet balance") {
+    super(message, "INSUFFICIENT_BALANCE");
+    this.name = "InsufficientBalanceError";
+  }
+}

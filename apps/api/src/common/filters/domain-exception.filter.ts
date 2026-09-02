@@ -14,6 +14,9 @@ import {
   UnauthorizedError,
   ForbiddenError,
   ConflictError,
+  ConnectorUnavailableError,
+  InsufficientBalanceError,
+  SessionStateError,
 } from "@evcharge/domain";
 
 @Catch()
@@ -66,6 +69,30 @@ export class DomainExceptionFilter implements ExceptionFilter {
     }
 
     if (exception instanceof ConflictError) {
+      response.status(HttpStatus.CONFLICT).json({
+        code: exception.code,
+        message: exception.message,
+      });
+      return;
+    }
+
+    if (exception instanceof ConnectorUnavailableError) {
+      response.status(HttpStatus.CONFLICT).json({
+        code: exception.code,
+        message: exception.message,
+      });
+      return;
+    }
+
+    if (exception instanceof InsufficientBalanceError) {
+      response.status(HttpStatus.PAYMENT_REQUIRED).json({
+        code: exception.code,
+        message: exception.message,
+      });
+      return;
+    }
+
+    if (exception instanceof SessionStateError) {
       response.status(HttpStatus.CONFLICT).json({
         code: exception.code,
         message: exception.message,

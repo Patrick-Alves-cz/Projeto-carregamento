@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import { ArrowLeft, Cable, MapPin, PlugZap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,12 +11,27 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/query-state";
 import { StatusBadge } from "@/components/status-badge";
 import { useQuery } from "@/hooks/use-query";
-import { getStation } from "@/lib/api-client";
+import { chargerDemoAction, getStation } from "@/lib/api-client";
 import { amenityLabel } from "@/lib/labels";
 
 export default function StationDetailPage() {
   const params = useParams<{ id: string }>();
-  const { data: station, error, loading } = useQuery(() => getStation(params.id), [params.id]);
+  const [tick, setTick] = useState(0);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const { data: station, error, loading } = useQuery(() => getStation(params.id), [params.id, tick]);
+
+  async function runAction(
+    chargerId: string,
+    action: "offline" | "maintenance" | "fault" | "restore",
+  ) {
+    setActionBusy(`${chargerId}-${action}`);
+    try {
+      await chargerDemoAction(chargerId, action);
+      setTick((v) => v + 1);
+    } finally {
+      setActionBusy(null);
+    }
+  }
 
   if (loading) {
     return (
@@ -131,7 +147,40 @@ export default function StationDetailPage() {
                   <StatusBadge kind="charger" status={charger.status} />
                 </div>
               </CardHeader>
-              <CardContent className="px-5">
+              <CardContent className="space-y-3 px-5">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={actionBusy !== null}
+                    onClick={() => runAction(charger.id, "offline")}
+                  >
+                    Offline
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={actionBusy !== null}
+                    onClick={() => runAction(charger.id, "maintenance")}
+                  >
+                    Manutenção
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={actionBusy !== null}
+                    onClick={() => runAction(charger.id, "fault")}
+                  >
+                    Simular falha
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={actionBusy !== null}
+                    onClick={() => runAction(charger.id, "restore")}
+                  >
+                    Restaurar
+                  </Button>
+                </div>
                 <div className="space-y-2">
                   {charger.connectors.map((connector) => (
                     <div

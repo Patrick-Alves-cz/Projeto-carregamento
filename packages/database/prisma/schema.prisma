@@ -43,9 +43,14 @@ enum StationStatus {
 }
 
 enum ChargerStatus {
-  ONLINE
-  OFFLINE
+  AVAILABLE
+  PREPARING
+  CHARGING
+  SUSPENDED
+  FINISHING
+  UNAVAILABLE
   FAULTED
+  OFFLINE
 }
 
 enum ConnectorType {
@@ -58,9 +63,45 @@ enum ConnectorType {
 
 enum ConnectorStatus {
   AVAILABLE
-  OCCUPIED
+  PREPARING
+  CHARGING
+  SUSPENDED
+  FINISHING
   UNAVAILABLE
   FAULTED
+}
+
+enum SessionStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum SessionStopReason {
+  USER_STOP
+  INSUFFICIENT_BALANCE
+  FAULT
+  DISCONNECTED
+  TIMEOUT
+  ADMIN
+}
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+  HOLD
+  RELEASE
+  REFUND
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
 }
 
 // ─── Users & Profiles ──────────────────────────────────────────────────────────
@@ -74,10 +115,12 @@ model User {
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
-  profile        Profile?
-  companyMembers CompanyMember[]
-  vehicles       Vehicle[]
-  refreshTokens  RefreshToken[]
+  profile          Profile?
+  companyMembers   CompanyMember[]
+  vehicles         Vehicle[]
+  refreshTokens    RefreshToken[]
+  wallet           Wallet?
+  chargingSessions ChargingSession[]
 
   @@map("users")
 }
@@ -125,6 +168,7 @@ model Company {
 
   members  CompanyMember[]
   stations Station[]
+  tariffs  Tariff[]
 
   @@map("companies")
 }
@@ -157,7 +201,8 @@ model Vehicle {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chargingSessions ChargingSession[]
 
   @@map("vehicles")
 }
@@ -191,6 +236,7 @@ model Charger {
   maxPowerKw   Decimal       @map("max_power_kw") @db.Decimal(10, 2)
   status       ChargerStatus @default(OFFLINE)
   providerId   String?       @map("provider_id")
+  lastSeenAt   DateTime?     @map("last_seen_at")
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
@@ -211,9 +257,146 @@ model Connector {
   createdAt  DateTime        @default(now()) @map("created_at")
   updatedAt  DateTime        @updatedAt @map("updated_at")
 
-  charger Charger @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  charger          Charger           @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  chargingSessions ChargingSession[]
 
   @@unique([chargerId, number])
   @@index([chargerId, status])
   @@map("connectors")
+}
+
+// ─── Tariffs ─────────────────────────────────────────────────────────────────
+
+model Tariff {
+  id               String   @id @default(cuid())
+  companyId        String   @map("company_id")
+  name             String
+  pricePerKwhCents Int      @map("price_per_kwh_cents")
+  minBalanceCents  Int      @default(500) @map("min_balance_cents")
+  currency         String   @default("BRL")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions ChargingSession[]
+
+  @@index([companyId, active])
+  @@map("tariffs")
+}
+
+// ─── Charging Sessions ───────────────────────────────────────────────────────
+
+model ChargingSession {
+  id              String             @id @default(cuid())
+  userId          String             @map("user_id")
+  vehicleId       String             @map("vehicle_id")
+  connectorId     String             @map("connector_id")
+  tariffId        String             @map("tariff_id")
+  tariffSnapshot  Json               @map("tariff_snapshot")
+  status          SessionStatus      @default(PENDING)
+  stopReason      SessionStopReason? @map("stop_reason")
+  startedAt       DateTime?          @map("started_at")
+  endedAt         DateTime?          @map("ended_at")
+  pausedAt        DateTime?          @map("paused_at")
+  energyKwh       Decimal            @default(0) @map("energy_kwh") @db.Decimal(12, 4)
+  currentPowerKw  Decimal?           @map("current_power_kw") @db.Decimal(10, 2)
+  currentVoltage  Decimal?           @map("current_voltage") @db.Decimal(10, 2)
+  currentAmperage Decimal?           @map("current_amperage") @db.Decimal(10, 2)
+  costCents       Int                @default(0) @map("cost_cents")
+  idempotencyKey  String?            @unique @map("idempotency_key")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  connector          Connector           @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  tariff             Tariff              @relation(fields: [tariffId], references: [id], onDelete: Restrict)
+  meterValues        MeterValue[]
+  payment            Payment?
+  walletTransactions WalletTransaction[]
+
+  @@index([userId, status])
+  @@index([connectorId, status])
+  @@index([status, startedAt])
+  @@map("charging_sessions")
+}
+
+model MeterValue {
+  id          String   @id @default(cuid())
+  sessionId   String   @map("session_id")
+  timestamp   DateTime @default(now())
+  energyKwh   Decimal  @map("energy_kwh") @db.Decimal(12, 4)
+  powerKw     Decimal  @map("power_kw") @db.Decimal(10, 2)
+  voltage     Decimal? @db.Decimal(10, 2)
+  current     Decimal? @db.Decimal(10, 2)
+  temperature Decimal? @db.Decimal(5, 2)
+
+  session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, timestamp])
+  @@map("meter_values")
+}
+
+// ─── Wallet (DEMO) ───────────────────────────────────────────────────────────
+
+model Wallet {
+  id           String   @id @default(cuid())
+  userId       String   @unique @map("user_id")
+  balanceCents Int      @default(0) @map("balance_cents")
+  currency     String   @default("BRL")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id                String                @id @default(cuid())
+  walletId          String                @map("wallet_id")
+  sessionId         String?               @map("session_id")
+  type              WalletTransactionType
+  amountCents       Int                   @map("amount_cents")
+  balanceAfterCents Int                   @map("balance_after_cents")
+  description       String
+  idempotencyKey    String?               @unique @map("idempotency_key")
+  createdAt         DateTime              @default(now()) @map("created_at")
+
+  wallet  Wallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  session ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  sessionId   String        @unique @map("session_id")
+  amountCents Int           @map("amount_cents")
+  currency    String        @default("BRL")
+  status      PaymentStatus @default(PENDING)
+  method      String        @default("WALLET_DEMO")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// ─── Audit Events ────────────────────────────────────────────────────────────
+
+model ChargingEvent {
+  id         String   @id @default(cuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  eventType  String   @map("event_type")
+  payload    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@map("charging_events")
 }

@@ -5,8 +5,10 @@ import { MockChargerProvider } from "../mock/mock-charger-provider";
 
 describe("ChargerProviderFactory", () => {
   it("creates MockChargerProvider for mock type", () => {
+    ChargerProviderFactory.resetMockInstance();
     const provider = ChargerProviderFactory.create("mock");
     assert.ok(provider instanceof MockChargerProvider);
+    ChargerProviderFactory.resetMockInstance();
   });
 
   it("throws for unimplemented OCPP types", () => {

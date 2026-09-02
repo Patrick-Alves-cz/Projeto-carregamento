@@ -35,6 +35,7 @@ import { useQuery } from "@/hooks/use-query";
 
 const NAV = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
+  { href: "/dashboard/operations", label: "Operação ao vivo", icon: Zap },
   { href: "/dashboard/stations", label: "Estações", icon: MapPin },
 ];
 

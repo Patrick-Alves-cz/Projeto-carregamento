@@ -11,7 +11,18 @@ export const createChargerSchema = z.object({
 export const updateChargerSchema = z.object({
   model: z.string().min(1).max(100).optional(),
   maxPowerKw: z.number().positive().optional(),
-  status: z.enum(["ONLINE", "OFFLINE", "FAULTED"]).optional(),
+  status: z
+    .enum([
+      "AVAILABLE",
+      "PREPARING",
+      "CHARGING",
+      "SUSPENDED",
+      "FINISHING",
+      "UNAVAILABLE",
+      "FAULTED",
+      "OFFLINE",
+    ])
+    .optional(),
   providerId: z.string().optional(),
 });
 

@@ -5,3 +5,5 @@ export * from "./vehicle";
 export * from "./station";
 export * from "./charger";
 export * from "./connector";
+export * from "./session";
+export * from "./tariff";

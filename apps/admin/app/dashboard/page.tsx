@@ -7,7 +7,8 @@ import { KpiSkeleton, QueryError, TableSkeleton } from "@/components/query-state
 import { StationsTable } from "@/components/stations-table";
 import { useQuery } from "@/hooks/use-query";
 import { useAuth } from "@/components/app-shell";
-import { listStations } from "@/lib/api-client";
+import { listStations, listActiveSessions, listSessions } from "@/lib/api-client";
+import { formatCurrency, isChargerOnline } from "@/lib/labels";
 
 function Kpi({
   label,
@@ -41,13 +42,17 @@ function Kpi({
 export default function DashboardPage() {
   const user = useAuth();
   const stationsQuery = useQuery(listStations, []);
+  const activeSessionsQuery = useQuery(listActiveSessions, []);
+  const completedSessionsQuery = useQuery(() => listSessions({ status: "COMPLETED", limit: 100 }), []);
 
   const stations = stationsQuery.data ?? [];
+  const activeSessions = activeSessionsQuery.data ?? [];
+  const completedSessions = completedSessionsQuery.data?.items ?? [];
   const chargers = stations.flatMap((s) => s.chargers);
-  const online = chargers.filter((c) => c.status === "ONLINE").length;
-  const free = stations.reduce((acc, s) => acc + s.availability.availableConnectors, 0);
-  const totalConnectors = stations.reduce((acc, s) => acc + s.availability.totalConnectors, 0);
-  const maintenance = stations.filter((s) => s.status === "MAINTENANCE").length;
+  const online = chargers.filter((c) => isChargerOnline(c.status)).length;
+  const occupied = chargers.filter((c) => c.status === "CHARGING").length;
+  const totalEnergy = completedSessions.reduce((acc, s) => acc + (s.energyKwh ?? 0), 0);
+  const totalRevenue = completedSessions.reduce((acc, s) => acc + (s.costCents ?? 0), 0);
   const company = user.companies[0]?.name;
   const name = user.profile?.fullName?.split(" ")[0];
 
@@ -70,8 +75,8 @@ export default function DashboardPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Kpi label="Estações" value={stations.length} hint="No recorte da sua empresa" icon={MapPin} />
           <Kpi label="Carregadores online" value={`${online}/${chargers.length}`} hint="Disponíveis para operação" icon={PlugZap} />
-          <Kpi label="Conectores livres" value={`${free}/${totalConnectors}`} hint="Prontos para iniciar recarga" icon={Cable} />
-          <Kpi label="Em manutenção" value={maintenance} hint="Estações fora de operação normal" icon={Wrench} />
+          <Kpi label="Sessões ativas" value={activeSessions.length} hint={`${occupied} carregadores ocupados`} icon={Cable} />
+          <Kpi label="Receita demo" value={formatCurrency(totalRevenue)} hint={`${totalEnergy.toFixed(1)} kWh consumidos`} icon={Wrench} />
         </div>
       )}
 

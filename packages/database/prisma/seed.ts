@@ -25,6 +25,25 @@ async function main() {
   await prisma.refreshToken.deleteMany({
     where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });
+  await prisma.walletTransaction.deleteMany({
+    where: { wallet: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
+  await prisma.payment.deleteMany({
+    where: { session: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
+  await prisma.meterValue.deleteMany({
+    where: { session: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
+  await prisma.chargingSession.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.wallet.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.chargingEvent.deleteMany({});
+  await prisma.tariff.deleteMany({
+    where: { company: { slug: { in: ["evcharge-sp", "evcharge-rj"] } } },
+  });
   await prisma.connector.deleteMany({
     where: { charger: { station: { company: { slug: { in: ["evcharge-sp", "evcharge-rj"] } } } } },
   });
@@ -125,10 +144,10 @@ async function main() {
       longitude: -46.6559,
       status: StationStatus.ACTIVE,
       chargers: [
-        { serial: "SP-DC-001", power: 150, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 150, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CCS2, power: 150, status: ConnectorStatus.OCCUPIED }] },
-        { serial: "SP-DC-002", power: 120, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 120, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CCS2, power: 120, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "SP-DC-003", power: 100, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 100, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "SP-DC-004", power: 80, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 80, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-DC-001", power: 150, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 150, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CCS2, power: 150, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-DC-002", power: 120, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 120, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CCS2, power: 120, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-DC-003", power: 100, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 100, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-DC-004", power: 80, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 80, status: ConnectorStatus.AVAILABLE }] },
       ],
     },
     {
@@ -139,8 +158,8 @@ async function main() {
       longitude: -46.6595,
       status: StationStatus.ACTIVE,
       chargers: [
-        { serial: "SP-AC-001", power: 22, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "SP-AC-002", power: 22, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-AC-001", power: 22, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "SP-AC-002", power: 22, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
       ],
     },
     {
@@ -163,9 +182,9 @@ async function main() {
       longitude: -43.1822,
       status: StationStatus.ACTIVE,
       chargers: [
-        { serial: "RJ-MULTI-001", power: 180, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 180, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CHADEMO, power: 100, status: ConnectorStatus.AVAILABLE }, { n: 3, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "RJ-MULTI-002", power: 60, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 60, status: ConnectorStatus.FAULTED }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "RJ-MULTI-003", power: 50, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 50, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "RJ-MULTI-001", power: 180, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 180, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.CHADEMO, power: 100, status: ConnectorStatus.AVAILABLE }, { n: 3, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "RJ-MULTI-002", power: 60, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 60, status: ConnectorStatus.FAULTED }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "RJ-MULTI-003", power: 50, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 50, status: ConnectorStatus.AVAILABLE }] },
       ],
     },
     {
@@ -177,8 +196,8 @@ async function main() {
       status: StationStatus.ACTIVE,
       chargers: [
         { serial: "RJ-PR-001", power: 75, status: ChargerStatus.OFFLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 75, status: ConnectorStatus.UNAVAILABLE }] },
-        { serial: "RJ-PR-002", power: 22, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
-        { serial: "RJ-PR-003", power: 50, status: ChargerStatus.ONLINE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 50, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "RJ-PR-002", power: 22, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }, { n: 2, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.AVAILABLE }] },
+        { serial: "RJ-PR-003", power: 50, status: ChargerStatus.AVAILABLE, connectors: [{ n: 1, type: ConnectorType.CCS2, power: 50, status: ConnectorStatus.AVAILABLE }] },
         { serial: "RJ-PR-005", power: 22, status: ChargerStatus.OFFLINE, connectors: [{ n: 1, type: ConnectorType.TYPE2, power: 22, status: ConnectorStatus.UNAVAILABLE }] },
       ],
     },
@@ -227,6 +246,29 @@ async function main() {
     }
   }
 
+  await prisma.tariff.createMany({
+    data: [
+      {
+        companyId: companySp.id,
+        name: "Tarifa SP Padrão",
+        pricePerKwhCents: 189,
+        minBalanceCents: 500,
+      },
+      {
+        companyId: companyRj.id,
+        name: "Tarifa RJ Padrão",
+        pricePerKwhCents: 175,
+        minBalanceCents: 500,
+      },
+    ],
+  });
+
+  for (const driver of drivers) {
+    await prisma.wallet.create({
+      data: { userId: driver.id, balanceCents: 10000, currency: "BRL" },
+    });
+  }
+
   console.log("Seed completed:");
   console.log(`  Super admin: superadmin${DEMO_EMAIL_DOMAIN}`);
   console.log(`  Operators: operator.sp${DEMO_EMAIL_DOMAIN}, operator.rj${DEMO_EMAIL_DOMAIN}`);
@@ -235,6 +277,8 @@ async function main() {
   console.log(`  Password (all): ${DEMO_PASSWORD}`);
   console.log(`  Companies: ${companySp.slug}, ${companyRj.slug}`);
   console.log(`  Stations: 5, Chargers: ${chargerCount}, Connectors: ${connectorCount}`);
+  console.log(`  Demo wallets: R$ 100,00 for each driver`);
+  console.log(`  Tariffs: R$ 1,89/kWh (SP), R$ 1,75/kWh (RJ)`);
   console.log(`  Super admin id: ${superAdmin.id}`);
   void operatorSp;
   void operatorRj;

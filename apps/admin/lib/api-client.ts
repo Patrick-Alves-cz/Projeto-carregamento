@@ -158,3 +158,82 @@ export async function listStations() {
 export async function getStation(id: string) {
   return apiFetch<Station>(`/stations/${id}`);
 }
+
+export interface ChargingSession {
+  id: string;
+  status: string;
+  energyKwh: number;
+  currentPowerKw: number | null;
+  costCents: number;
+  durationSeconds: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  stopReason: string | null;
+  userId: string;
+  userName: string;
+  vehicle: { brand: string; model: string };
+  station: { id: string; name: string; address: string };
+  charger: { id: string; serialNumber: string; maxPowerKw: number; status: string };
+  connector: { id: string; number: number; type: string; status: string; maxPowerKw: number };
+  payment?: { amountCents: number; status: string } | null;
+}
+
+export interface SessionsListResponse {
+  items: ChargingSession[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function startSession(connectorId: string, vehicleId: string) {
+  return apiFetch<ChargingSession>("/sessions/start", {
+    method: "POST",
+    body: JSON.stringify({ connectorId, vehicleId }),
+  });
+}
+
+export async function stopSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/stop`, { method: "POST" });
+}
+
+export async function getSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}`);
+}
+
+export async function listSessions(params?: {
+  status?: string;
+  stationId?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.status) query.set("status", params.status);
+  if (params?.stationId) query.set("stationId", params.stationId);
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.limit) query.set("limit", String(params.limit));
+  const qs = query.toString();
+  return apiFetch<SessionsListResponse>(`/sessions${qs ? `?${qs}` : ""}`);
+}
+
+export async function listActiveSessions() {
+  return apiFetch<ChargingSession[]>("/sessions/active/live");
+}
+
+export async function chargerDemoAction(
+  chargerId: string,
+  action: "offline" | "maintenance" | "fault" | "restore",
+) {
+  return apiFetch<{ chargerId: string; action: string; status: string }>(
+    `/chargers/${chargerId}/demo-action`,
+    { method: "POST", body: JSON.stringify({ action }) },
+  );
+}
+
+const WS_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api").replace(
+  /\/api$/,
+  "",
+);
+
+export function getRealtimeUrl() {
+  return `${WS_URL}/realtime`;
+}
