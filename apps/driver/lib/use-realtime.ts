@@ -29,6 +29,9 @@ export function useRealtime(onEvent: (event: { type: string; payload: unknown })
       socket.on("session.completed", forward("session.completed"));
       socket.on("session.failed", forward("session.failed"));
       socket.on("session.event", forward("session.event"));
+      socket.on("connector.status.changed", forward("connector.status.changed"));
+      socket.on("charger.status.changed", forward("charger.status.changed"));
+      socket.on("discovery.updated", forward("discovery.updated"));
     })();
 
     return () => {

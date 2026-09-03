@@ -1,7 +1,19 @@
+import { CONNECTOR_TYPE_LABELS, type ConnectorType } from "@evcharge/shared";
 import { getItem, removeItem, setItem } from "./storage";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api";
 const AUTH_KEY = "evcharge_auth";
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export interface AuthTokens {
   accessToken: string;
@@ -12,7 +24,8 @@ export interface AuthUser {
   id: string;
   email: string;
   role: string;
-  profile: { fullName: string } | null;
+  status?: string;
+  profile: { fullName: string; phone: string | null; avatarUrl?: string | null } | null;
   companies: { id: string; name: string; slug: string }[];
 }
 
@@ -23,6 +36,10 @@ export interface Connector {
   type: string;
   maxPowerKw: number;
   status: string;
+  compatible: boolean | null;
+  pricePerKwhCents: number | null;
+  currency: string;
+  action: "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE";
 }
 
 export interface Charger {
@@ -32,7 +49,14 @@ export interface Charger {
   model: string | null;
   maxPowerKw: number;
   status: string;
+  lastSeenAt: string | null;
   connectors: Connector[];
+}
+
+export interface Reliability {
+  lastCommunicationAt: string | null;
+  lastUpdatedAt: string;
+  availabilityPercent: number | null;
 }
 
 export interface Station {
@@ -40,10 +64,23 @@ export interface Station {
   companyId: string;
   name: string;
   address: string;
+  city: string | null;
+  postalCode: string | null;
   latitude: number;
   longitude: number;
   status: string;
+  accessType: string;
   amenities: string[];
+  openingHoursLabel: string | null;
+  currentType: "AC" | "DC" | "MIXED" | null;
+  maxPowerKw: number;
+  pricePerKwhCents: number | null;
+  currency: string;
+  compatible: boolean | null;
+  crowded: boolean;
+  lastSeenAt: string | null;
+  updatedAt: string;
+  reliability: Reliability;
   availability: {
     totalConnectors: number;
     availableConnectors: number;
@@ -52,13 +89,63 @@ export interface Station {
   chargers: Charger[];
 }
 
+export interface NearbyStation {
+  id: string;
+  name: string;
+  address: string;
+  city: string | null;
+  postalCode: string | null;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+  status: string;
+  accessType: string;
+  amenities: string[];
+  openingHoursLabel: string | null;
+  chargerCount: number;
+  availableConnectors: number;
+  totalConnectors: number;
+  crowded: boolean;
+  currentType: "AC" | "DC" | "MIXED" | null;
+  maxPowerKw: number;
+  pricePerKwhCents: number | null;
+  currency: string;
+  compatible: boolean | null;
+  lastSeenAt: string | null;
+  updatedAt: string;
+  reliability: Reliability;
+}
+
+export interface NearbyQuery {
+  lat: number;
+  lng: number;
+  radiusKm?: number;
+  connectorType?: string;
+  powerMin?: number;
+  maxPrice?: number;
+  availability?: boolean;
+  vehicleId?: string;
+  currentType?: "AC" | "DC";
+  q?: string;
+}
+
 export interface Vehicle {
   id: string;
   brand: string;
   model: string;
   year: number | null;
-  batteryKwh: number | string | null;
+  batteryKwh: number | null;
   connectorTypes: string[];
+  isDefault: boolean;
+}
+
+export interface VehicleInput {
+  brand: string;
+  model: string;
+  year?: number;
+  batteryKwh?: number;
+  connectorTypes: ConnectorType[];
+  isDefault?: boolean;
 }
 
 export async function getStoredTokens(): Promise<AuthTokens | null> {
@@ -74,12 +161,14 @@ export async function clearTokens() {
   await removeItem(AUTH_KEY);
 }
 
-function readErrorMessage(data: unknown, fallback: string) {
-  if (!data || typeof data !== "object" || !("message" in data)) return fallback;
-  const message = (data as { message: unknown }).message;
-  if (typeof message === "string") return message;
-  if (Array.isArray(message)) return message.map(String).join(", ");
-  return fallback;
+function readError(data: unknown, fallback: string, status?: number) {
+  if (!data || typeof data !== "object") return new ApiError(fallback, undefined, status);
+  const record = data as { message?: unknown; code?: unknown };
+  const code = typeof record.code === "string" ? record.code : undefined;
+  let message = fallback;
+  if (typeof record.message === "string") message = record.message;
+  else if (Array.isArray(record.message)) message = record.message.map(String).join(", ");
+  return new ApiError(message, code, status);
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
@@ -113,7 +202,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   const data = await res.json().catch(() => ({}));
   const isPublicAuth = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/logout"].includes(
-    path,
+    path.split("?")[0] ?? path,
   );
 
   if (res.status === 401 && retry && !isPublicAuth) {
@@ -123,10 +212,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
     const refreshed = await refreshInFlight;
     if (refreshed) return apiFetch<T>(path, options, false);
     await clearTokens();
-    throw new Error("Sessão expirada");
+    throw new ApiError("Sessão expirada. Entre novamente.", "UNAUTHORIZED", 401);
   }
 
-  if (!res.ok) throw new Error(readErrorMessage(data, "Falha na requisição"));
+  if (!res.ok) throw readError(data, "Falha na requisição", res.status);
   return data as T;
 }
 
@@ -134,6 +223,20 @@ export async function login(email: string, password: string) {
   const data = await apiFetch<{ accessToken: string; refreshToken: string; user: AuthUser }>(
     "/auth/login",
     { method: "POST", body: JSON.stringify({ email, password }) },
+  );
+  await storeTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+  return data;
+}
+
+export async function register(input: {
+  fullName: string;
+  email: string;
+  phone?: string;
+  password: string;
+}) {
+  const data = await apiFetch<{ accessToken: string; refreshToken: string; user: AuthUser }>(
+    "/auth/register",
+    { method: "POST", body: JSON.stringify({ ...input, role: "DRIVER" }) },
   );
   await storeTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
   return data;
@@ -154,16 +257,57 @@ export async function getMe() {
   return apiFetch<AuthUser>("/auth/me");
 }
 
-export async function listStations() {
-  return apiFetch<Station[]>("/stations");
+export async function updateMe(input: { fullName?: string; phone?: string }) {
+  return apiFetch<AuthUser>("/users/me", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
 }
 
-export async function getStation(id: string) {
-  return apiFetch<Station>(`/stations/${id}`);
+export async function listNearbyStations(query: NearbyQuery) {
+  const params = new URLSearchParams();
+  params.set("lat", String(query.lat));
+  params.set("lng", String(query.lng));
+  if (query.radiusKm) params.set("radiusKm", String(query.radiusKm));
+  if (query.connectorType) params.set("connectorType", query.connectorType);
+  if (query.powerMin) params.set("powerMin", String(query.powerMin));
+  if (query.maxPrice) params.set("maxPrice", String(query.maxPrice));
+  if (query.availability) params.set("availability", "true");
+  if (query.vehicleId) params.set("vehicleId", query.vehicleId);
+  if (query.currentType) params.set("currentType", query.currentType);
+  if (query.q) params.set("q", query.q);
+  return apiFetch<NearbyStation[]>(`/stations/nearby?${params.toString()}`);
+}
+
+export async function getStation(id: string, vehicleId?: string) {
+  const qs = vehicleId ? `?vehicleId=${encodeURIComponent(vehicleId)}` : "";
+  return apiFetch<Station>(`/stations/${id}${qs}`);
 }
 
 export async function listVehicles() {
   return apiFetch<Vehicle[]>("/vehicles");
+}
+
+export async function getVehicle(id: string) {
+  return apiFetch<Vehicle>(`/vehicles/${id}`);
+}
+
+export async function createVehicle(input: VehicleInput) {
+  return apiFetch<Vehicle>("/vehicles", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateVehicle(id: string, input: Partial<VehicleInput>) {
+  return apiFetch<Vehicle>(`/vehicles/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteVehicle(id: string) {
+  return apiFetch<{ success: boolean }>(`/vehicles/${id}`, { method: "DELETE" });
 }
 
 export interface ChargingSession {
@@ -191,14 +335,21 @@ export interface SessionsListResponse {
 }
 
 export async function startSession(connectorId: string, vehicleId: string) {
+  const idempotencyKey =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `start-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
   return apiFetch<ChargingSession>("/sessions/start", {
     method: "POST",
-    body: JSON.stringify({ connectorId, vehicleId }),
+    body: JSON.stringify({ connectorId, vehicleId, idempotencyKey }),
   });
 }
 
 export async function stopSession(sessionId: string) {
-  return apiFetch<ChargingSession>(`/sessions/${sessionId}/stop`, { method: "POST" });
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/stop`, {
+    method: "POST",
+    body: JSON.stringify({ idempotencyKey: `stop-${sessionId}` }),
+  });
 }
 
 export async function getSession(sessionId: string) {
@@ -221,4 +372,8 @@ const WS_URL = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api").
 
 export function getRealtimeUrl() {
   return `${WS_URL}/realtime`;
+}
+
+export function connectorLabel(type: string) {
+  return CONNECTOR_TYPE_LABELS[type as ConnectorType] ?? type;
 }

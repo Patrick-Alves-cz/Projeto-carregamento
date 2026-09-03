@@ -1,8 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { QueryError, TableSkeleton } from "@/components/query-state";
 import { StationsTable } from "@/components/stations-table";
 import { useQuery } from "@/hooks/use-query";
@@ -28,11 +30,16 @@ export default function StationsPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="space-y-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Estações</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Infraestrutura da empresa, com status e disponibilidade de conectores.
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Estações</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Infraestrutura da empresa, com status e disponibilidade de conectores.
+            </p>
+          </div>
+          <Button asChild>
+            <Link href="/dashboard/stations/new">Nova estação</Link>
+          </Button>
         </div>
         <Tabs value={filter} onValueChange={(value) => setFilter(value as typeof filter)}>
           <TabsList className="w-full justify-start sm:w-auto">

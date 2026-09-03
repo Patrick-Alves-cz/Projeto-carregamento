@@ -7,6 +7,7 @@ export const createVehicleSchema = z.object({
   year: z.number().int().min(1990).max(2100).optional(),
   batteryKwh: z.number().positive().optional(),
   connectorTypes: z.array(z.enum(CONNECTOR_TYPES)).min(1),
+  isDefault: z.boolean().optional(),
 });
 
 export const updateVehicleSchema = createVehicleSchema.partial();

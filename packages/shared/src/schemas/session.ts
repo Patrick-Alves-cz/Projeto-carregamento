@@ -1,15 +1,29 @@
 import { z } from "zod";
 
+export const SESSION_STATUSES = [
+  "PENDING",
+  "PREPARING",
+  "ACTIVE",
+  "PAUSED",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+] as const;
+
 export const startSessionSchema = z.object({
   connectorId: z.string().cuid(),
   vehicleId: z.string().cuid(),
   idempotencyKey: z.string().min(8).max(128).optional(),
 });
 
+export const stopSessionSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(128).optional(),
+  })
+  .default({});
+
 export const listSessionsQuerySchema = z.object({
-  status: z
-    .enum(["PENDING", "ACTIVE", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"])
-    .optional(),
+  status: z.enum(SESSION_STATUSES).optional(),
   stationId: z.string().cuid().optional(),
   userId: z.string().cuid().optional(),
   from: z.coerce.date().optional(),
@@ -23,4 +37,5 @@ export const sessionIdParamSchema = z.object({
 });
 
 export type StartSessionInput = z.infer<typeof startSessionSchema>;
+export type StopSessionInput = z.infer<typeof stopSessionSchema>;
 export type ListSessionsQuery = z.infer<typeof listSessionsQuerySchema>;

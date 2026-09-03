@@ -1,18 +1,22 @@
 import { Injectable } from "@nestjs/common";
-import { ConflictError, NotFoundError } from "@evcharge/domain";
+import { UserRole } from "@prisma/client";
+import { ConflictError, ForbiddenError, NotFoundError, assertChargerStatusTransition } from "@evcharge/domain";
 import type { CreateChargerInput, UpdateChargerInput } from "@evcharge/shared";
 import { PrismaService } from "../common/database/database.module";
 import { TenantAccessService } from "../common/services/tenant-access.service";
 import { AuthenticatedUser } from "../common/types/auth.types";
+import { ChargerProviderService } from "../charging/charger-provider.service";
 
 @Injectable()
 export class ChargersService {
   constructor(
     private prisma: PrismaService,
     private tenantAccess: TenantAccessService,
+    private chargerProvider: ChargerProviderService,
   ) {}
 
   async findAll(stationId: string | undefined, user: AuthenticatedUser) {
+    this.assertAdminSurface(user);
     const stations = await this.getAccessibleStationIds(user, stationId);
     return this.prisma.charger.findMany({
       where: { stationId: { in: stations } },
@@ -22,12 +26,13 @@ export class ChargersService {
   }
 
   async findOne(id: string, user: AuthenticatedUser) {
+    this.assertAdminSurface(user);
     const charger = await this.prisma.charger.findUnique({
       where: { id },
       include: { connectors: true, station: true },
     });
     if (!charger) throw new NotFoundError("Charger", id);
-    if (user.role !== "DRIVER" && !this.tenantAccess.isSuperAdmin(user)) {
+    if (!this.tenantAccess.isSuperAdmin(user)) {
       this.tenantAccess.assertCompanyAccess(user, charger.station.companyId);
     }
     return charger;
@@ -42,10 +47,17 @@ export class ChargersService {
     this.tenantAccess.assertCompanyAccess(user, station.companyId);
 
     try {
-      return await this.prisma.charger.create({
-        data: input,
+      const charger = await this.prisma.charger.create({
+        data: {
+          ...input,
+          status: "AVAILABLE",
+          lastSeenAt: new Date(),
+          providerId: input.providerId ?? "mock",
+        },
         include: { connectors: true },
       });
+      await this.chargerProvider.syncCharger(charger.id);
+      return charger;
     } catch {
       throw new ConflictError("Charger serial number already exists");
     }
@@ -60,11 +72,23 @@ export class ChargersService {
     this.tenantAccess.assertCompanyAccess(user, charger.station.companyId);
     this.tenantAccess.assertOperatorOrAbove(user);
 
-    return this.prisma.charger.update({
+    if (input.status && input.status !== charger.status) {
+      assertChargerStatusTransition(charger.status, input.status);
+    }
+
+    const updated = await this.prisma.charger.update({
       where: { id },
       data: input,
       include: { connectors: true },
     });
+    await this.chargerProvider.syncCharger(updated.id);
+    return updated;
+  }
+
+  private assertAdminSurface(user: AuthenticatedUser) {
+    if (user.role === UserRole.DRIVER) {
+      throw new ForbiddenError("Motoristas acessam carregadores pela estação");
+    }
   }
 
   private async getAccessibleStationIds(
@@ -80,7 +104,7 @@ export class ChargersService {
       return [stationId];
     }
 
-    if (this.tenantAccess.isSuperAdmin(user) || user.role === "DRIVER") {
+    if (this.tenantAccess.isSuperAdmin(user)) {
       const all = await this.prisma.station.findMany({ select: { id: true } });
       return all.map((s) => s.id);
     }

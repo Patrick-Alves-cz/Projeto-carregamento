@@ -9,11 +9,15 @@ import {
   Query,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { UserRole } from "@prisma/client";
 import {
   createStationSchema,
   updateStationSchema,
   listStationsQuerySchema,
+  nearbyStationsQuerySchema,
+  stationDetailQuerySchema,
 } from "@evcharge/shared";
+import { Roles } from "../common/decorators/auth.decorators";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthenticatedUser } from "../common/types/auth.types";
@@ -34,13 +38,31 @@ export class StationsController {
     return this.stationsService.findAll(query as Parameters<StationsService["findAll"]>[0], user);
   }
 
+  @Get("nearby")
+  @ApiOperation({ summary: "Discover nearby stations for the driver map" })
+  nearby(
+    @Query(new ZodValidationPipe(nearbyStationsQuerySchema)) query: unknown,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.stationsService.findNearby(
+      query as Parameters<StationsService["findNearby"]>[0],
+      user,
+    );
+  }
+
   @Get(":id")
   @ApiOperation({ summary: "Get station with chargers and connectors" })
-  findOne(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.stationsService.findOne(id, user);
+  findOne(
+    @Param("id") id: string,
+    @Query(new ZodValidationPipe(stationDetailQuerySchema)) query: unknown,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const parsed = query as { vehicleId?: string };
+    return this.stationsService.findOne(id, user, parsed.vehicleId);
   }
 
   @Post()
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Create station (operator+)" })
   create(
     @Body(new ZodValidationPipe(createStationSchema)) body: unknown,
@@ -50,6 +72,7 @@ export class StationsController {
   }
 
   @Patch(":id")
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Update station" })
   update(
     @Param("id") id: string,
@@ -60,6 +83,7 @@ export class StationsController {
   }
 
   @Delete(":id")
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Delete station" })
   remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.stationsService.remove(id, user);

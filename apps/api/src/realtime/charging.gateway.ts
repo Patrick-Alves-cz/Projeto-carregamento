@@ -9,10 +9,19 @@ import { Logger } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import type { Server, Socket } from "socket.io";
 import type { DomainEvent } from "@evcharge/domain";
-import { UserRole } from "@prisma/client";
+import { UserRole, UserStatus } from "@prisma/client";
 import { PrismaService } from "../common/database/database.module";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import type { JwtPayload } from "../common/types/auth.types";
+import { getRequiredJwtAccessSecret } from "../common/config/jwt-secrets";
+
+type RealtimeEnvelope = {
+  type: string;
+  entityType: string;
+  entityId: string;
+  payload: unknown;
+  timestamp: string;
+};
 
 @WebSocketGateway({
   cors: {
@@ -56,13 +65,15 @@ export class ChargingGateway
         return;
       }
 
-      const payload = this.jwtService.verify<JwtPayload>(token);
+      const payload = this.jwtService.verify<JwtPayload>(token, {
+        secret: getRequiredJwtAccessSecret(),
+      });
       const user = await this.prisma.user.findUnique({
         where: { id: payload.sub },
         include: { companyMembers: true },
       });
 
-      if (!user) {
+      if (!user || user.status !== UserStatus.ACTIVE) {
         client.disconnect(true);
         return;
       }
@@ -74,13 +85,13 @@ export class ChargingGateway
       };
 
       await client.join(`user:${user.id}`);
+      await client.join("discovery");
 
-      if (user.role !== UserRole.DRIVER) {
+      if (user.role === UserRole.SUPER_ADMIN) {
+        await client.join("superadmin");
+      } else if (user.role !== UserRole.DRIVER) {
         for (const companyId of client.data.user.companyIds) {
           await client.join(`company:${companyId}`);
-        }
-        if (user.role === UserRole.SUPER_ADMIN) {
-          await client.join("superadmin");
         }
       }
 
@@ -96,32 +107,50 @@ export class ChargingGateway
 
   private broadcast(event: DomainEvent): void {
     const payload = event.payload as Record<string, unknown>;
-    const sessionUserId = payload.userId as string | undefined;
+    const sessionUserId = typeof payload.userId === "string" ? payload.userId : undefined;
+    const companyId = typeof payload.companyId === "string" ? payload.companyId : undefined;
 
-    this.server.emit(event.type, {
+    const envelope: RealtimeEnvelope = {
       type: event.type,
       entityType: event.entityType,
       entityId: event.entityId,
       payload: event.payload,
       timestamp: event.timestamp.toISOString(),
-    });
+    };
 
     if (sessionUserId) {
-      this.server.to(`user:${sessionUserId}`).emit("session.event", {
+      this.emitToRoom(`user:${sessionUserId}`, envelope);
+    }
+
+    if (companyId) {
+      this.emitToRoom(`company:${companyId}`, envelope, "operations.event");
+    }
+
+    this.emitToRoom("superadmin", envelope, "operations.event");
+
+    if (event.type === "connector.status.changed" || event.type === "charger.status.changed") {
+      const discoveryEnvelope: RealtimeEnvelope = {
         type: event.type,
         entityType: event.entityType,
         entityId: event.entityId,
-        payload: event.payload,
         timestamp: event.timestamp.toISOString(),
-      });
+        payload: {
+          connectorId: payload.connectorId,
+          chargerId: payload.chargerId,
+          stationId: payload.stationId,
+          status: payload.status,
+        },
+      };
+      this.emitToRoom("discovery", discoveryEnvelope, "discovery.updated");
     }
+  }
 
-    this.server.to("superadmin").emit("operations.event", {
-      type: event.type,
-      entityType: event.entityType,
-      entityId: event.entityId,
-      payload: event.payload,
-      timestamp: event.timestamp.toISOString(),
-    });
+  private emitToRoom(room: string, envelope: RealtimeEnvelope, extraEvent?: string): void {
+    this.server.to(room).emit(envelope.type, envelope);
+    if (extraEvent) {
+      this.server.to(room).emit(extraEvent, envelope);
+    } else {
+      this.server.to(room).emit("session.event", envelope);
+    }
   }
 }

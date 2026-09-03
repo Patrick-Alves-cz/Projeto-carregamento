@@ -1,11 +1,13 @@
 import { createHash, randomBytes } from "crypto";
+import { getRequiredJwtRefreshSecret } from "../config/jwt-secrets";
 
 export function generateRefreshToken(): string {
   return randomBytes(48).toString("base64url");
 }
 
 export function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  const pepper = getRequiredJwtRefreshSecret();
+  return createHash("sha256").update(`${pepper}:${token}`).digest("hex");
 }
 
 export function parseDurationToMs(duration: string): number {

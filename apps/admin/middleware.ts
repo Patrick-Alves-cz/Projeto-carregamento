@@ -1,15 +1,40 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { jwtVerify } from "jose";
+import { isAdminPanelRole } from "@evcharge/shared";
 
-export function middleware(request: NextRequest) {
-  const token = request.cookies.get("evcharge_token")?.value;
+async function readAccessPayload(token: string | undefined) {
+  if (!token) return null;
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) return null;
+  try {
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export async function middleware(request: NextRequest) {
+  const access = request.cookies.get("evcharge_access")?.value;
+  const refresh = request.cookies.get("evcharge_refresh")?.value;
+  const payload = await readAccessPayload(access);
+  const role = typeof payload?.role === "string" ? payload.role : null;
   const isLogin = request.nextUrl.pathname.startsWith("/login");
+  const hasSession = Boolean(payload || refresh);
 
-  if (!token && !isLogin && request.nextUrl.pathname !== "/") {
+  if (payload && !isAdminPanelRole(role ?? "")) {
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.set("evcharge_access", "", { path: "/", maxAge: 0 });
+    response.cookies.set("evcharge_refresh", "", { path: "/", maxAge: 0 });
+    return response;
+  }
+
+  if (!hasSession && !isLogin) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (token && isLogin) {
+  if (hasSession && isLogin && (!payload || isAdminPanelRole(role ?? ""))) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

@@ -4,15 +4,21 @@ import { PassportModule } from "@nestjs/passport";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { JwtStrategy } from "./jwt.strategy";
+import {
+  getJwtAccessExpiresIn,
+  getRequiredJwtAccessSecret,
+} from "../common/config/jwt-secrets";
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: "jwt" }),
-    JwtModule.register({
-      secret: process.env.JWT_ACCESS_SECRET ?? "dev-access-secret-change-me",
-      signOptions: {
-        expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as `${number}m`,
-      },
+    JwtModule.registerAsync({
+      useFactory: () => ({
+        secret: getRequiredJwtAccessSecret(),
+        signOptions: {
+          expiresIn: getJwtAccessExpiresIn(),
+        },
+      }),
     }),
   ],
   controllers: [AuthController],

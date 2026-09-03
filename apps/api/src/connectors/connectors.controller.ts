@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { UserRole } from "@prisma/client";
 import { createConnectorSchema, updateConnectorSchema } from "@evcharge/shared";
+import { Roles } from "../common/decorators/auth.decorators";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthenticatedUser } from "../common/types/auth.types";
@@ -8,6 +10,7 @@ import { ConnectorsService } from "./connectors.service";
 
 @ApiTags("connectors")
 @ApiBearerAuth()
+@Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
 @Controller("connectors")
 export class ConnectorsController {
   constructor(private connectorsService: ConnectorsService) {}

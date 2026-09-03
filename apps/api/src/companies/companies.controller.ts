@@ -15,6 +15,7 @@ export class CompaniesController {
   constructor(private companiesService: CompaniesService) {}
 
   @Get(":id")
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Get company by ID" })
   findOne(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.companiesService.findOne(id, user);
@@ -31,6 +32,7 @@ export class CompaniesController {
   }
 
   @Patch(":id")
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Update company" })
   update(
     @Param("id") id: string,

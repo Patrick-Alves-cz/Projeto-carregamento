@@ -209,6 +209,55 @@ export class MockChargerProvider implements ChargerProvider {
     }
   }
 
+  async pauseCharging(chargerId: string, connectorId: number): Promise<void> {
+    const runtime = this.getRuntime(chargerId);
+    const connector = this.getConnector(runtime, connectorId);
+    if (!connector.sessionId) {
+      throw new Error(`Connector ${connectorId} has no active session to pause`);
+    }
+
+    if (connector.interval) {
+      clearInterval(connector.interval);
+      connector.interval = undefined;
+    }
+
+    const previous = connector.status;
+    connector.targetPowerKw = 0;
+    connector.status = "suspended";
+    this.emitStatus(runtime.chargerId, connector.number, previous, "suspended", connector.sessionId);
+    this.refreshChargerAggregateStatus(runtime);
+  }
+
+  async resumeCharging(chargerId: string, connectorId: number): Promise<void> {
+    const runtime = this.getRuntime(chargerId);
+    const connector = this.getConnector(runtime, connectorId);
+    if (!connector.sessionId) {
+      throw new Error(`Connector ${connectorId} has no session to resume`);
+    }
+    if (connector.status !== "suspended") {
+      throw new Error(`Connector ${connectorId} is not paused (${connector.status})`);
+    }
+
+    const powerCap = Math.min(runtime.maxPowerKw, connector.maxPowerKw);
+    connector.targetPowerKw = powerCap * scenarioPowerFactor(runtime.scenario);
+    connector.status = "charging";
+    this.emitStatus(
+      runtime.chargerId,
+      connector.number,
+      "suspended",
+      "charging",
+      connector.sessionId,
+    );
+    this.setChargerStatus(runtime, "charging");
+
+    connector.interval = setInterval(() => {
+      this.tickMeter(runtime, connector);
+    }, runtime.meterIntervalMs);
+    if (typeof connector.interval.unref === "function") {
+      connector.interval.unref();
+    }
+  }
+
   async stopCharging(chargerId: string, connectorId: number): Promise<void> {
     const runtime = this.getRuntime(chargerId);
     const connector = this.getConnector(runtime, connectorId);
@@ -410,6 +459,10 @@ export class MockChargerProvider implements ChargerProvider {
         runtime,
         connectors.some((c) => c.status === "preparing") ? "preparing" : "finishing",
       );
+      return;
+    }
+    if (connectors.some((c) => c.status === "suspended")) {
+      this.setChargerStatus(runtime, "suspended");
       return;
     }
     if (!runtime.connected) {

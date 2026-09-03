@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard,
   LogOut,
+  Map,
   MapPin,
   Menu,
   Zap,
@@ -29,12 +30,14 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { getMe, logout, type AuthUser } from "@/lib/api-client";
+import { isAdminPanelRole } from "@evcharge/shared";
 import { initials, roleLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@/hooks/use-query";
 
 const NAV = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
+  { href: "/dashboard/map", label: "Mapa da rede", icon: Map },
   { href: "/dashboard/operations", label: "Operação ao vivo", icon: Zap },
   { href: "/dashboard/stations", label: "Estações", icon: MapPin },
 ];
@@ -178,6 +181,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6">
         <p className="text-sm text-muted-foreground">{error || "Sessão inválida"}</p>
         <Button onClick={handleLogout}>Ir para o login</Button>
+      </div>
+    );
+  }
+
+  if (!isAdminPanelRole(user.role)) {
+    void handleLogout();
+    return (
+      <div className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">
+        Redirecionando…
       </div>
     );
   }

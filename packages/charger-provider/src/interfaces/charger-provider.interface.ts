@@ -15,6 +15,8 @@ export interface ChargerProvider {
     sessionId: string,
   ): Promise<void>;
   stopCharging(chargerId: string, connectorId: number): Promise<void>;
+  pauseCharging(chargerId: string, connectorId: number): Promise<void>;
+  resumeCharging(chargerId: string, connectorId: number): Promise<void>;
   getMeterValues(chargerId: string, connectorId: number): Promise<MeterReading>;
   setAvailability(
     chargerId: string,

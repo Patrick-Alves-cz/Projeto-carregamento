@@ -1,9 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api";
+import { isAdminPanelRole } from "@evcharge/shared";
 
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
+const API_URL = "/api/proxy";
 
 export interface AuthUser {
   id: string;
@@ -39,10 +36,19 @@ export interface Station {
   companyId: string;
   name: string;
   address: string;
+  city?: string | null;
+  postalCode?: string | null;
   latitude: number;
   longitude: number;
   status: string;
+  accessType?: string;
   amenities: string[];
+  openingHours?: Record<string, unknown> | null;
+  openingHoursLabel?: string | null;
+  currentType?: string | null;
+  maxPowerKw?: number;
+  pricePerKwhCents?: number | null;
+  lastSeenAt?: string | null;
   createdAt: string;
   updatedAt: string;
   availability: {
@@ -53,20 +59,57 @@ export interface Station {
   chargers: Charger[];
 }
 
-export function getStoredTokens(): AuthTokens | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem("evcharge_auth");
-  return raw ? (JSON.parse(raw) as AuthTokens) : null;
+export interface StationInput {
+  name: string;
+  address: string;
+  city?: string;
+  postalCode?: string;
+  latitude: number;
+  longitude: number;
+  amenities?: string[];
+  accessType?: "PUBLIC" | "PRIVATE" | "RESTRICTED";
+  openingHours?: { label?: string; alwaysOpen?: boolean; timezone?: string };
+  status?: "ACTIVE" | "MAINTENANCE" | "INACTIVE";
 }
 
-export function storeTokens(tokens: AuthTokens) {
-  localStorage.setItem("evcharge_auth", JSON.stringify(tokens));
-  document.cookie = `evcharge_token=${tokens.accessToken}; path=/; max-age=604800; SameSite=Lax`;
+export async function createStation(input: StationInput) {
+  return apiFetch<Station>("/stations", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function clearTokens() {
-  localStorage.removeItem("evcharge_auth");
-  document.cookie = "evcharge_token=; path=/; max-age=0";
+export async function updateStation(id: string, input: Partial<StationInput>) {
+  return apiFetch<Station>(`/stations/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function createCharger(input: {
+  stationId: string;
+  serialNumber: string;
+  model?: string;
+  maxPowerKw: number;
+}) {
+  return apiFetch<Charger>("/chargers", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateCharger(
+  id: string,
+  input: { model?: string; maxPowerKw?: number; status?: string },
+) {
+  return apiFetch<Charger>(`/chargers/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function createConnector(input: {
+  chargerId: string;
+  number: number;
+  type: string;
+  maxPowerKw: number;
+}) {
+  return apiFetch<Connector>("/connectors", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateConnector(
+  id: string,
+  input: { type?: string; maxPowerKw?: number; status?: string },
+) {
+  return apiFetch<Connector>(`/connectors/${id}`, { method: "PATCH", body: JSON.stringify(input) });
 }
 
 function readErrorMessage(data: unknown, fallback: string) {
@@ -77,48 +120,20 @@ function readErrorMessage(data: unknown, fallback: string) {
   return fallback;
 }
 
-let refreshInFlight: Promise<boolean> | null = null;
-
-async function tryRefresh(): Promise<boolean> {
-  const tokens = getStoredTokens();
-  if (!tokens?.refreshToken) return false;
-  try {
-    const res = await fetch(`${API_URL}/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-    });
-    const data = (await res.json().catch(() => ({}))) as AuthTokens;
-    if (!res.ok || !data.accessToken) return false;
-    storeTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function apiFetch<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
-  const tokens = getStoredTokens();
+export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
-  if (tokens?.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
   const data = await res.json().catch(() => ({}));
 
-  const isPublicAuth = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/logout"].includes(
-    path,
-  );
-
-  if (res.status === 401 && retry && !isPublicAuth) {
-    refreshInFlight ??= tryRefresh().finally(() => {
-      refreshInFlight = null;
-    });
-    const refreshed = await refreshInFlight;
-    if (refreshed) return apiFetch<T>(path, options, false);
-    clearTokens();
+  if (res.status === 401) {
     if (typeof window !== "undefined") window.location.assign("/login");
     throw new Error("Sessão expirada");
   }
@@ -128,23 +143,29 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
 }
 
 export async function login(email: string, password: string) {
-  const data = await apiFetch<{ accessToken: string; refreshToken: string; user: AuthUser }>(
-    "/auth/login",
-    { method: "POST", body: JSON.stringify({ email, password }) },
-  );
-  storeTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, password }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { user?: AuthUser; message?: string };
+  if (!res.ok) throw new Error(readErrorMessage(data, "Não foi possível entrar"));
+  if (!data.user || !isAdminPanelRole(data.user.role)) {
+    throw new Error("Esta conta não tem acesso ao painel administrativo.");
+  }
   return data;
 }
 
 export async function logout() {
-  const tokens = getStoredTokens();
-  if (tokens?.refreshToken) {
-    await apiFetch("/auth/logout", {
-      method: "POST",
-      body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-    }).catch(() => undefined);
-  }
-  clearTokens();
+  await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+}
+
+export async function getWsToken() {
+  const res = await fetch("/api/auth/ws-token", { credentials: "include" });
+  const data = (await res.json().catch(() => ({}))) as { token?: string };
+  if (!res.ok || !data.token) throw new Error("Sessão expirada");
+  return data.token;
 }
 
 export async function getMe() {
@@ -188,12 +209,19 @@ export interface SessionsListResponse {
 export async function startSession(connectorId: string, vehicleId: string) {
   return apiFetch<ChargingSession>("/sessions/start", {
     method: "POST",
-    body: JSON.stringify({ connectorId, vehicleId }),
+    body: JSON.stringify({
+      connectorId,
+      vehicleId,
+      idempotencyKey: crypto.randomUUID(),
+    }),
   });
 }
 
 export async function stopSession(sessionId: string) {
-  return apiFetch<ChargingSession>(`/sessions/${sessionId}/stop`, { method: "POST" });
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/stop`, {
+    method: "POST",
+    body: JSON.stringify({ idempotencyKey: `stop-${sessionId}` }),
+  });
 }
 
 export async function getSession(sessionId: string) {

@@ -13,6 +13,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { useQuery } from "@/hooks/use-query";
 import { chargerDemoAction, getStation } from "@/lib/api-client";
 import { amenityLabel } from "@/lib/labels";
+import { StationOpsForms } from "@/components/station-ops-forms";
 
 export default function StationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -202,6 +203,8 @@ export default function StationDetailPage() {
           ))}
         </div>
       )}
+
+      <StationOpsForms station={station} onSaved={() => setTick((v) => v + 1)} />
     </div>
   );
 }

@@ -57,6 +57,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     try {
       const session = await this.prisma.chargingSession.findUnique({
         where: { id: event.sessionId },
+        include: { connector: { include: { charger: { include: { station: true } } } } },
       });
 
       if (!session || session.status !== SessionStatus.ACTIVE) return;
@@ -115,6 +116,9 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
         timestamp: new Date(),
         payload: {
           sessionId: session.id,
+          userId: session.userId,
+          connectorId: session.connectorId,
+          companyId: session.connector.charger.station.companyId,
           energyKwh: event.reading.energyKwh,
           powerKw: event.reading.powerKw,
           voltage: event.reading.voltage,
@@ -133,6 +137,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           status: session.status,
           userId: session.userId,
           connectorId: session.connectorId,
+          companyId: session.connector.charger.station.companyId,
           energyKwh: event.reading.energyKwh,
           powerKw: event.reading.powerKw,
           costCents,
@@ -155,6 +160,12 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
         });
         if (!connector) return;
 
+        const charger = await this.prisma.charger.findUnique({
+          where: { id: event.chargerId },
+          include: { station: true },
+        });
+        if (!charger) return;
+
         const dbStatus = fromProviderConnectorStatus(
           event.status as Parameters<typeof fromProviderConnectorStatus>[0],
         );
@@ -171,6 +182,8 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           payload: {
             connectorId: connector.id,
             chargerId: event.chargerId,
+            stationId: charger.stationId,
+            companyId: charger.station.companyId,
             status: dbStatus,
             previousStatus: event.previousStatus,
             sessionId: event.sessionId,
@@ -187,6 +200,12 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
         const dbChargerStatus = fromProviderChargerStatus(
           event.status as Parameters<typeof fromProviderChargerStatus>[0],
         );
+        const charger = await this.prisma.charger.findUnique({
+          where: { id: event.chargerId },
+          include: { station: true },
+        });
+        if (!charger) return;
+
         await this.prisma.charger.update({
           where: { id: event.chargerId },
           data: { status: dbChargerStatus, lastSeenAt: new Date() },
@@ -199,6 +218,8 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           timestamp: new Date(),
           payload: {
             chargerId: event.chargerId,
+            stationId: charger.stationId,
+            companyId: charger.station.companyId,
             status: dbChargerStatus,
             previousStatus: event.previousStatus,
             sessionId: event.sessionId,
@@ -269,7 +290,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const session = await this.prisma.chargingSession.findUnique({
       where: { id: sessionId },
-      include: { connector: { include: { charger: true } } },
+      include: { connector: { include: { charger: { include: { station: true } } } } },
     });
     if (!session || !isSessionActive(session.status)) return;
 
@@ -293,7 +314,14 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
       entityType: "session",
       entityId: sessionId,
       timestamp: new Date(),
-      payload: { sessionId, status, reason },
+      payload: {
+        sessionId,
+        status,
+        reason,
+        userId: session.userId,
+        connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
+      },
     });
   }
 }

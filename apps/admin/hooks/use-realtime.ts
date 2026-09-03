@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { getRealtimeUrl, getStoredTokens } from "@/lib/api-client";
+import { getRealtimeUrl, getWsToken } from "@/lib/api-client";
 
 export function useRealtime(onEvent?: (event: { type: string; payload: unknown }) => void) {
   const [connected, setConnected] = useState(false);
@@ -11,34 +11,43 @@ export function useRealtime(onEvent?: (event: { type: string; payload: unknown }
   handlerRef.current = onEvent;
 
   useEffect(() => {
-    const tokens = getStoredTokens();
-    if (!tokens?.accessToken) return;
+    let active = true;
 
-    const socket = io(getRealtimeUrl(), {
-      auth: { token: tokens.accessToken },
-      transports: ["websocket"],
-    });
-    socketRef.current = socket;
+    void (async () => {
+      try {
+        const token = await getWsToken();
+        if (!active) return;
 
-    socket.on("connect", () => setConnected(true));
-    socket.on("disconnect", () => setConnected(false));
+        const socket = io(getRealtimeUrl(), {
+          auth: { token },
+          transports: ["websocket"],
+        });
+        socketRef.current = socket;
 
-    const forward = (type: string) => (payload: unknown) => {
-      handlerRef.current?.({ type, payload });
-    };
+        socket.on("connect", () => setConnected(true));
+        socket.on("disconnect", () => setConnected(false));
 
-    socket.on("session.started", forward("session.started"));
-    socket.on("session.updated", forward("session.updated"));
-    socket.on("meter.value", forward("meter.value"));
-    socket.on("session.completed", forward("session.completed"));
-    socket.on("session.failed", forward("session.failed"));
-    socket.on("charger.status.changed", forward("charger.status.changed"));
-    socket.on("connector.status.changed", forward("connector.status.changed"));
-    socket.on("session.event", forward("session.event"));
-    socket.on("operations.event", forward("operations.event"));
+        const forward = (type: string) => (payload: unknown) => {
+          handlerRef.current?.({ type, payload });
+        };
+
+        socket.on("session.started", forward("session.started"));
+        socket.on("session.updated", forward("session.updated"));
+        socket.on("meter.value", forward("meter.value"));
+        socket.on("session.completed", forward("session.completed"));
+        socket.on("session.failed", forward("session.failed"));
+        socket.on("charger.status.changed", forward("charger.status.changed"));
+        socket.on("connector.status.changed", forward("connector.status.changed"));
+        socket.on("session.event", forward("session.event"));
+        socket.on("operations.event", forward("operations.event"));
+      } catch {
+        setConnected(false);
+      }
+    })();
 
     return () => {
-      socket.disconnect();
+      active = false;
+      socketRef.current?.disconnect();
       socketRef.current = null;
     };
   }, []);

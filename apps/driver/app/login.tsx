@@ -10,7 +10,8 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { login } from "../lib/api-client";
+import { login, logout } from "../lib/api-client";
+import { isDriverRole } from "@evcharge/shared";
 import { colors, radius } from "../lib/theme";
 
 export default function LoginScreen() {
@@ -24,7 +25,12 @@ export default function LoginScreen() {
     setLoading(true);
     setError("");
     try {
-      await login(email, password);
+      const data = await login(email, password);
+      if (!isDriverRole(data.user.role)) {
+        await logout();
+        setError("Esta conta não é de motorista.");
+        return;
+      }
       router.replace("/(app)/(tabs)");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível entrar");
@@ -77,6 +83,9 @@ export default function LoginScreen() {
           style={({ pressed }) => [styles.button, pressed && styles.pressed, loading && styles.disabled]}
         >
           <Text style={styles.buttonText}>{loading ? "Entrando…" : "Entrar"}</Text>
+        </Pressable>
+        <Pressable onPress={() => router.push("/register")}>
+          <Text style={styles.register}>Criar conta de motorista</Text>
         </Pressable>
         <Text style={styles.hint}>Demo: driver1@evcharge.demo / Demo@12345</Text>
       </View>
@@ -136,4 +145,5 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.6 },
   error: { color: colors.danger, fontSize: 14, marginBottom: 12 },
   hint: { color: colors.muted, fontSize: 12, marginTop: 14, textAlign: "center" },
+  register: { color: colors.primary, fontSize: 14, fontWeight: "600", marginTop: 16, textAlign: "center" },
 });

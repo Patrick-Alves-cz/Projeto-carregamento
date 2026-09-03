@@ -24,7 +24,13 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Usamos sua localização para mostrar estações próximas."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

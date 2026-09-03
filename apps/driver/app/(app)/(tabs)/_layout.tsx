@@ -20,8 +20,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Estações",
-          tabBarIcon: ({ color, size }) => <Ionicons name="location" color={color} size={size} />,
+          title: "Mapa",
+          tabBarIcon: ({ color, size }) => <Ionicons name="map" color={color} size={size} />,
         }}
       />
       <Tabs.Screen
@@ -34,7 +34,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: "Recargas",
+          title: "Sessões",
           tabBarIcon: ({ color, size }) => <Ionicons name="flash" color={color} size={size} />,
         }}
       />

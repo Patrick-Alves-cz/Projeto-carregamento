@@ -41,21 +41,42 @@ export class ChargerProviderService implements OnModuleInit, OnModuleDestroy {
     });
 
     for (const charger of chargers) {
-      await mock.registerCharger(charger.id, {
-        maxPowerKw: Number(charger.maxPowerKw),
-        connectors: charger.connectors.map((c) => ({
-          number: c.number,
-          maxPowerKw: Number(c.maxPowerKw),
-          status: toProviderConnectorStatus(c.status),
-        })),
-        meterIntervalMs: Number(process.env.METER_INTERVAL_MS ?? 3000),
-      });
-
-      if (charger.status !== "OFFLINE" && charger.status !== "FAULTED") {
-        await mock.connect(charger.id);
-      }
+      await this.registerMockCharger(charger);
     }
 
     this.logger.log(`Synced ${chargers.length} chargers into MockChargerProvider`);
+  }
+
+  async syncCharger(chargerId: string): Promise<void> {
+    const charger = await this.prisma.charger.findUnique({
+      where: { id: chargerId },
+      include: { connectors: { orderBy: { number: "asc" } } },
+    });
+    if (!charger) return;
+    await this.registerMockCharger(charger);
+  }
+
+  private async registerMockCharger(charger: {
+    id: string;
+    maxPowerKw: unknown;
+    status: string;
+    connectors: Array<{ number: number; maxPowerKw: unknown; status: Parameters<typeof toProviderConnectorStatus>[0] }>;
+  }): Promise<void> {
+    const mock = this.mockProvider;
+    if (!mock) return;
+
+    await mock.registerCharger(charger.id, {
+      maxPowerKw: Number(charger.maxPowerKw),
+      connectors: charger.connectors.map((c) => ({
+        number: c.number,
+        maxPowerKw: Number(c.maxPowerKw),
+        status: toProviderConnectorStatus(c.status),
+      })),
+      meterIntervalMs: Number(process.env.METER_INTERVAL_MS ?? 3000),
+    });
+
+    if (charger.status !== "OFFLINE" && charger.status !== "FAULTED") {
+      await mock.connect(charger.id);
+    }
   }
 }

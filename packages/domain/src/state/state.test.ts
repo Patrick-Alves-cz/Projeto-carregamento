@@ -1,9 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { canTransitionChargerStatus } from "./charger-status";
-import { canTransitionConnectorStatus } from "./connector-status";
-import { canTransitionSessionStatus, isSessionTerminal } from "./session-status";
+import { canTransitionChargerStatus, assertChargerStatusTransition } from "./charger-status";
+import { canTransitionConnectorStatus, assertConnectorStatusTransition } from "./connector-status";
+import {
+  canTransitionSessionStatus,
+  isSessionTerminal,
+  assertSessionStatusTransition,
+} from "./session-status";
 import { calculateCostCents } from "../finance/cost-calculator";
+import { InvalidStateTransitionError } from "../errors";
 
 describe("charger status transitions", () => {
   it("allows AVAILABLE → PREPARING", () => {
@@ -12,6 +17,10 @@ describe("charger status transitions", () => {
 
   it("blocks OFFLINE → CHARGING", () => {
     assert.equal(canTransitionChargerStatus("OFFLINE", "CHARGING"), false);
+    assert.throws(
+      () => assertChargerStatusTransition("OFFLINE", "CHARGING"),
+      InvalidStateTransitionError,
+    );
   });
 });
 
@@ -20,11 +29,28 @@ describe("connector status transitions", () => {
     assert.equal(canTransitionConnectorStatus("AVAILABLE", "PREPARING"), true);
     assert.equal(canTransitionConnectorStatus("PREPARING", "CHARGING"), true);
   });
+
+  it("blocks AVAILABLE → CHARGING", () => {
+    assert.equal(canTransitionConnectorStatus("AVAILABLE", "CHARGING"), false);
+    assert.throws(
+      () => assertConnectorStatusTransition("AVAILABLE", "CHARGING"),
+      InvalidStateTransitionError,
+    );
+  });
 });
 
 describe("session status transitions", () => {
   it("blocks COMPLETED → ACTIVE", () => {
     assert.equal(canTransitionSessionStatus("COMPLETED", "ACTIVE"), false);
+    assert.throws(
+      () => assertSessionStatusTransition("COMPLETED", "ACTIVE"),
+      InvalidStateTransitionError,
+    );
+  });
+
+  it("allows PENDING → PREPARING → ACTIVE", () => {
+    assert.equal(canTransitionSessionStatus("PENDING", "PREPARING"), true);
+    assert.equal(canTransitionSessionStatus("PREPARING", "ACTIVE"), true);
   });
 
   it("marks terminal states", () => {

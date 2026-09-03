@@ -1,3 +1,5 @@
+import { InvalidStateTransitionError } from "../errors";
+
 export const CONNECTOR_STATUSES = [
   "AVAILABLE",
   "PREPARING",
@@ -12,10 +14,10 @@ export type ConnectorOperationalStatus = (typeof CONNECTOR_STATUSES)[number];
 
 const VALID_TRANSITIONS: Record<ConnectorOperationalStatus, ConnectorOperationalStatus[]> = {
   AVAILABLE: ["PREPARING", "UNAVAILABLE", "FAULTED"],
-  PREPARING: ["CHARGING", "AVAILABLE", "FAULTED"],
-  CHARGING: ["SUSPENDED", "FINISHING", "FAULTED"],
-  SUSPENDED: ["CHARGING", "FINISHING", "FAULTED"],
-  FINISHING: ["AVAILABLE", "FAULTED"],
+  PREPARING: ["CHARGING", "AVAILABLE", "FAULTED", "UNAVAILABLE"],
+  CHARGING: ["SUSPENDED", "FINISHING", "FAULTED", "UNAVAILABLE", "AVAILABLE"],
+  SUSPENDED: ["CHARGING", "FINISHING", "FAULTED", "UNAVAILABLE", "AVAILABLE"],
+  FINISHING: ["AVAILABLE", "FAULTED", "UNAVAILABLE"],
   UNAVAILABLE: ["AVAILABLE", "FAULTED"],
   FAULTED: ["UNAVAILABLE", "AVAILABLE"],
 };
@@ -33,6 +35,6 @@ export function assertConnectorStatusTransition(
   to: ConnectorOperationalStatus,
 ): void {
   if (!canTransitionConnectorStatus(from, to)) {
-    throw new Error(`Invalid connector status transition: ${from} → ${to}`);
+    throw new InvalidStateTransitionError("connector", from, to);
   }
 }

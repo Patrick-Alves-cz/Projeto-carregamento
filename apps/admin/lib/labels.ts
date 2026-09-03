@@ -8,7 +8,8 @@ const CHARGER_STATUS: Record<string, string> = {
   AVAILABLE: "Disponível",
   PREPARING: "Preparando",
   CHARGING: "Carregando",
-  SUSPENDED: "Suspenso",
+  SUSPENDED: "Pausado",
+  PAUSED: "Pausado",
   FINISHING: "Finalizando",
   UNAVAILABLE: "Indisponível",
   FAULTED: "Falha",
@@ -17,18 +18,21 @@ const CHARGER_STATUS: Record<string, string> = {
 };
 
 const CONNECTOR_STATUS: Record<string, string> = {
-  AVAILABLE: "Livre",
+  AVAILABLE: "Disponível",
   PREPARING: "Preparando",
   CHARGING: "Carregando",
-  SUSPENDED: "Suspenso",
+  SUSPENDED: "Pausado",
+  PAUSED: "Pausado",
   FINISHING: "Finalizando",
   UNAVAILABLE: "Indisponível",
   FAULTED: "Falha",
   OCCUPIED: "Ocupado",
+  OFFLINE: "Offline",
 };
 
 const SESSION_STATUS: Record<string, string> = {
   PENDING: "Pendente",
+  PREPARING: "Preparando",
   ACTIVE: "Em andamento",
   PAUSED: "Pausada",
   COMPLETED: "Concluída",
@@ -67,9 +71,20 @@ const AMENITIES: Record<string, string> = {
   wifi: "Wi-Fi",
   cobertura: "Cobertura",
   banheiro: "Banheiro",
-  lanchonete: "Lanchonete",
+  restaurante: "Restaurante",
+  lanchonete: "Restaurante",
   estacionamento: "Estacionamento",
 };
+
+const ACCESS_TYPE: Record<string, string> = {
+  PUBLIC: "Público",
+  PRIVATE: "Privado",
+  RESTRICTED: "Restrito",
+};
+
+export function accessTypeLabel(value: string) {
+  return ACCESS_TYPE[value] ?? value;
+}
 
 export function amenityLabel(value: string) {
   return AMENITIES[value] ?? value;

@@ -1,8 +1,21 @@
 import { Injectable } from "@nestjs/common";
-import { ConnectorStatus, UserRole } from "@prisma/client";
-import { ForbiddenError, NotFoundError } from "@evcharge/domain";
+import {
+  ConnectorStatus,
+  Prisma,
+  StationStatus,
+  UserRole,
+  type ConnectorType,
+} from "@prisma/client";
+import {
+  ForbiddenError,
+  NotFoundError,
+  connectorMatchesCurrentType,
+  isVehicleCompatibleWithConnector,
+  stationCurrentType,
+} from "@evcharge/domain";
 import type {
   CreateStationInput,
+  NearbyStationsQuery,
   UpdateStationInput,
   ListStationsQuery,
 } from "@evcharge/shared";
@@ -11,11 +24,49 @@ import { TenantAccessService } from "../common/services/tenant-access.service";
 import { haversineDistanceKm } from "../common/utils/geo.util";
 import { AuthenticatedUser } from "../common/types/auth.types";
 
+const OCCUPIED_STATUSES: ConnectorStatus[] = [
+  ConnectorStatus.PREPARING,
+  ConnectorStatus.CHARGING,
+  ConnectorStatus.SUSPENDED,
+  ConnectorStatus.FINISHING,
+];
+
+const OFFLINE_CHARGER_STATUSES = new Set(["OFFLINE", "FAULTED", "UNAVAILABLE"]);
+
 const stationInclude = {
   chargers: {
-    include: { connectors: true },
+    include: { connectors: { orderBy: { number: "asc" as const } } },
+    orderBy: { serialNumber: "asc" as const },
+  },
+  company: {
+    include: {
+      tariffs: {
+        where: { active: true },
+        orderBy: { createdAt: "desc" as const },
+        take: 1,
+      },
+    },
   },
 } as const;
+
+type StationRecord = Prisma.StationGetPayload<{ include: typeof stationInclude }>;
+
+function isTruthyFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  return ["true", "1", "AVAILABLE", "yes"].includes(value);
+}
+
+function maxPriceToCents(maxPrice: number): number {
+  return Math.round(maxPrice * 100);
+}
+
+function openingHoursLabel(value: Prisma.JsonValue): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.alwaysOpen === true) return "24 horas";
+  if (typeof record.label === "string" && record.label.trim()) return record.label;
+  return null;
+}
 
 @Injectable()
 export class StationsService {
@@ -25,14 +76,7 @@ export class StationsService {
   ) {}
 
   async findAll(query: ListStationsQuery, user: AuthenticatedUser) {
-    const where =
-      user.role === UserRole.DRIVER || user.role === UserRole.SUPER_ADMIN
-        ? { ...(query.status ? { status: query.status } : {}) }
-        : {
-            companyId: { in: user.companyIds },
-            ...(query.status ? { status: query.status } : {}),
-          };
-
+    const where = this.listWhere(user, query.status);
     let stations = await this.prisma.station.findMany({
       where,
       include: stationInclude,
@@ -59,16 +103,62 @@ export class StationsService {
 
     if (query.connectorType) {
       stations = stations.filter((s) =>
-        s.chargers.some((c) =>
-          c.connectors.some((conn) => conn.type === query.connectorType),
-        ),
+        s.chargers.some((c) => c.connectors.some((conn) => conn.type === query.connectorType)),
       );
     }
 
     return stations.map((s) => this.enrichStation(s));
   }
 
-  async findOne(id: string, user: AuthenticatedUser) {
+  async findNearby(query: NearbyStationsQuery, user: AuthenticatedUser) {
+    const availableNow = isTruthyFlag(query.availability) || isTruthyFlag(query.availableNow);
+    const vehicleTypes = await this.resolveVehicleTypes(query.vehicleId, user);
+
+    const where: Prisma.StationWhereInput = {
+      ...this.listWhere(user),
+      ...(query.q
+        ? {
+            OR: [
+              { name: { contains: query.q, mode: "insensitive" } },
+              { address: { contains: query.q, mode: "insensitive" } },
+              { city: { contains: query.q, mode: "insensitive" } },
+              { postalCode: { contains: query.q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const stations = await this.prisma.station.findMany({
+      where,
+      include: stationInclude,
+    });
+
+    const results = stations
+      .map((station) => {
+        const distanceKm = haversineDistanceKm(
+          query.lat,
+          query.lng,
+          Number(station.latitude),
+          Number(station.longitude),
+        );
+        return { station, distanceKm };
+      })
+      .filter(({ distanceKm }) => distanceKm <= query.radiusKm)
+      .filter(({ station }) => this.matchesDiscoveryFilters(station, {
+        connectorType: query.connectorType,
+        powerMin: query.powerMin,
+        maxPrice: query.maxPrice,
+        availableNow,
+        currentType: query.currentType,
+        vehicleTypes,
+      }))
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .map(({ station, distanceKm }) => this.toDiscoveryCard(station, distanceKm, vehicleTypes));
+
+    return results;
+  }
+
+  async findOne(id: string, user: AuthenticatedUser, vehicleId?: string) {
     const station = await this.prisma.station.findUnique({
       where: { id },
       include: stationInclude,
@@ -79,7 +169,8 @@ export class StationsService {
       this.tenantAccess.assertCompanyAccess(user, station.companyId);
     }
 
-    return this.enrichStation(station);
+    const vehicleTypes = await this.resolveVehicleTypes(vehicleId, user);
+    return this.enrichStation(station, vehicleTypes);
   }
 
   async create(input: CreateStationInput, user: AuthenticatedUser) {
@@ -89,10 +180,16 @@ export class StationsService {
 
     const station = await this.prisma.station.create({
       data: {
-        ...input,
         companyId,
+        name: input.name,
+        address: input.address,
+        city: input.city,
+        postalCode: input.postalCode,
         latitude: input.latitude,
         longitude: input.longitude,
+        amenities: input.amenities,
+        accessType: input.accessType,
+        openingHours: (input.openingHours ?? {}) as Prisma.InputJsonValue,
       },
       include: stationInclude,
     });
@@ -107,7 +204,18 @@ export class StationsService {
 
     const updated = await this.prisma.station.update({
       where: { id },
-      data: input,
+      data: {
+        name: input.name,
+        address: input.address,
+        city: input.city,
+        postalCode: input.postalCode,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        amenities: input.amenities,
+        accessType: input.accessType,
+        status: input.status,
+        openingHours: input.openingHours as Prisma.InputJsonValue | undefined,
+      },
       include: stationInclude,
     });
     return this.enrichStation(updated);
@@ -122,53 +230,251 @@ export class StationsService {
     return { success: true };
   }
 
+  private listWhere(user: AuthenticatedUser, status?: StationStatus): Prisma.StationWhereInput {
+    const statusFilter = status ? { status } : {};
+    if (user.role === UserRole.DRIVER || user.role === UserRole.SUPER_ADMIN) {
+      return statusFilter;
+    }
+    return {
+      companyId: { in: user.companyIds },
+      ...statusFilter,
+    };
+  }
+
+  private async resolveVehicleTypes(
+    vehicleId: string | undefined,
+    user: AuthenticatedUser,
+  ): Promise<string[] | null> {
+    if (!vehicleId) return null;
+    const vehicle = await this.prisma.vehicle.findUnique({ where: { id: vehicleId } });
+    if (!vehicle) throw new NotFoundError("Vehicle", vehicleId);
+    if (user.role === UserRole.DRIVER && vehicle.userId !== user.id) {
+      throw new ForbiddenError("Cannot use another user's vehicle");
+    }
+    return vehicle.connectorTypes;
+  }
+
+  private matchesDiscoveryFilters(
+    station: StationRecord,
+    filters: {
+      connectorType?: ConnectorType;
+      powerMin?: number;
+      maxPrice?: number;
+      availableNow: boolean;
+      currentType?: "AC" | "DC";
+      vehicleTypes: string[] | null;
+    },
+  ): boolean {
+    const connectors = station.chargers.flatMap((charger) =>
+      charger.connectors.map((connector) => ({ charger, connector })),
+    );
+    const tariff = station.company.tariffs[0];
+
+    if (filters.maxPrice !== undefined) {
+      if (!tariff || tariff.pricePerKwhCents > maxPriceToCents(filters.maxPrice)) {
+        return false;
+      }
+    }
+
+    const matching = connectors.filter(({ charger, connector }) => {
+      if (filters.connectorType && connector.type !== filters.connectorType) return false;
+      if (filters.powerMin !== undefined && Number(connector.maxPowerKw) < filters.powerMin) {
+        return false;
+      }
+      if (filters.currentType && !connectorMatchesCurrentType(connector.type, filters.currentType)) {
+        return false;
+      }
+      if (
+        filters.vehicleTypes &&
+        !isVehicleCompatibleWithConnector(filters.vehicleTypes, connector.type)
+      ) {
+        return false;
+      }
+      if (filters.availableNow) {
+        if (station.status !== StationStatus.ACTIVE) return false;
+        if (OFFLINE_CHARGER_STATUSES.has(charger.status)) return false;
+        if (connector.status !== ConnectorStatus.AVAILABLE) return false;
+      }
+      return true;
+    });
+
+    if (
+      filters.connectorType ||
+      filters.powerMin ||
+      filters.currentType ||
+      filters.vehicleTypes ||
+      filters.availableNow
+    ) {
+      return matching.length > 0;
+    }
+
+    return true;
+  }
+
+  private toDiscoveryCard(
+    station: StationRecord,
+    distanceKm: number,
+    vehicleTypes: string[] | null,
+  ) {
+    const summary = this.summarize(station, vehicleTypes);
+    return {
+      id: station.id,
+      name: station.name,
+      address: station.address,
+      city: station.city,
+      postalCode: station.postalCode,
+      latitude: Number(station.latitude),
+      longitude: Number(station.longitude),
+      distanceKm: Number(distanceKm.toFixed(2)),
+      status: station.status,
+      accessType: station.accessType,
+      amenities: station.amenities,
+      openingHoursLabel: openingHoursLabel(station.openingHours),
+      chargerCount: station.chargers.length,
+      availableConnectors: summary.availableConnectors,
+      totalConnectors: summary.totalConnectors,
+      crowded: summary.totalConnectors > 0 && summary.availableConnectors === 0,
+      currentType: summary.currentType,
+      maxPowerKw: summary.maxPowerKw,
+      pricePerKwhCents: summary.pricePerKwhCents,
+      currency: summary.currency,
+      compatible: summary.compatible,
+      lastSeenAt: summary.lastSeenAt,
+      updatedAt: station.updatedAt,
+      reliability: {
+        lastCommunicationAt: summary.lastSeenAt,
+        lastUpdatedAt: station.updatedAt,
+        availabilityPercent: null,
+      },
+    };
+  }
+
+  private enrichStation(station: StationRecord, vehicleTypes: string[] | null = null) {
+    const summary = this.summarize(station, vehicleTypes);
+    return {
+      id: station.id,
+      companyId: station.companyId,
+      name: station.name,
+      address: station.address,
+      city: station.city,
+      postalCode: station.postalCode,
+      latitude: Number(station.latitude),
+      longitude: Number(station.longitude),
+      status: station.status,
+      accessType: station.accessType,
+      amenities: station.amenities,
+      openingHours: station.openingHours,
+      openingHoursLabel: openingHoursLabel(station.openingHours),
+      createdAt: station.createdAt,
+      updatedAt: station.updatedAt,
+      lastSeenAt: summary.lastSeenAt,
+      currentType: summary.currentType,
+      maxPowerKw: summary.maxPowerKw,
+      pricePerKwhCents: summary.pricePerKwhCents,
+      currency: summary.currency,
+      compatible: summary.compatible,
+      crowded: summary.totalConnectors > 0 && summary.availableConnectors === 0,
+      reliability: {
+        lastCommunicationAt: summary.lastSeenAt,
+        lastUpdatedAt: station.updatedAt,
+        availabilityPercent: null,
+      },
+      availability: {
+        totalConnectors: summary.totalConnectors,
+        availableConnectors: summary.availableConnectors,
+        occupiedConnectors: summary.totalConnectors - summary.availableConnectors,
+      },
+      chargers: station.chargers.map((charger) => ({
+        id: charger.id,
+        stationId: charger.stationId,
+        serialNumber: charger.serialNumber,
+        model: charger.model,
+        maxPowerKw: Number(charger.maxPowerKw),
+        status: charger.status,
+        lastSeenAt: charger.lastSeenAt,
+        connectors: charger.connectors.map((connector) => {
+          const compatible =
+            vehicleTypes === null
+              ? null
+              : isVehicleCompatibleWithConnector(vehicleTypes, connector.type);
+          return {
+            id: connector.id,
+            chargerId: connector.chargerId,
+            number: connector.number,
+            type: connector.type,
+            maxPowerKw: Number(connector.maxPowerKw),
+            status: connector.status,
+            compatible,
+            pricePerKwhCents: summary.pricePerKwhCents,
+            currency: summary.currency,
+            action: this.connectorAction(
+              station.status,
+              charger.status,
+              connector.status,
+              compatible,
+            ),
+          };
+        }),
+      })),
+    };
+  }
+
+  private summarize(station: StationRecord, vehicleTypes: string[] | null) {
+    const connectors = station.chargers.flatMap((charger) => charger.connectors);
+    const totalConnectors = connectors.length;
+    const availableConnectors = connectors.filter(
+      (connector) => connector.status === ConnectorStatus.AVAILABLE,
+    ).length;
+    const types = connectors.map((connector) => connector.type);
+    const lastSeenAt = station.chargers.reduce<Date | null>((latest, charger) => {
+      if (!charger.lastSeenAt) return latest;
+      if (!latest || charger.lastSeenAt > latest) return charger.lastSeenAt;
+      return latest;
+    }, null);
+    const tariff = station.company.tariffs[0];
+    const compatible =
+      vehicleTypes === null
+        ? null
+        : connectors.some((connector) =>
+            isVehicleCompatibleWithConnector(vehicleTypes, connector.type),
+          );
+
+    return {
+      totalConnectors,
+      availableConnectors,
+      currentType: stationCurrentType(types),
+      maxPowerKw: station.chargers.reduce(
+        (max, charger) => Math.max(max, Number(charger.maxPowerKw)),
+        0,
+      ),
+      pricePerKwhCents: tariff?.pricePerKwhCents ?? null,
+      currency: tariff?.currency ?? "BRL",
+      lastSeenAt,
+      compatible,
+    };
+  }
+
+  private connectorAction(
+    stationStatus: StationStatus,
+    chargerStatus: string,
+    connectorStatus: ConnectorStatus,
+    compatible: boolean | null,
+  ): "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE" {
+    if (stationStatus !== StationStatus.ACTIVE) return "UNAVAILABLE";
+    if (OFFLINE_CHARGER_STATUSES.has(chargerStatus)) return "UNAVAILABLE";
+    if (connectorStatus === ConnectorStatus.FAULTED || connectorStatus === ConnectorStatus.UNAVAILABLE) {
+      return "UNAVAILABLE";
+    }
+    if (compatible === false) return "INCOMPATIBLE";
+    if (OCCUPIED_STATUSES.includes(connectorStatus)) return "OCCUPIED";
+    if (connectorStatus === ConnectorStatus.AVAILABLE) return "CHARGE";
+    return "UNAVAILABLE";
+  }
+
   private resolveCompanyId(user: AuthenticatedUser): string {
     if (!user.companyIds.length) {
       throw new ForbiddenError("User has no company membership");
     }
     return user.companyIds[0]!;
-  }
-
-  private enrichStation(station: {
-    id: string;
-    companyId: string;
-    name: string;
-    address: string;
-    latitude: unknown;
-    longitude: unknown;
-    status: string;
-    amenities: string[];
-    chargers: {
-      id: string;
-      status: string;
-      maxPowerKw: unknown;
-      connectors: { status: ConnectorStatus; maxPowerKw: unknown }[];
-    }[];
-  }) {
-    const totalConnectors = station.chargers.reduce((acc, c) => acc + c.connectors.length, 0);
-    const availableConnectors = station.chargers.reduce(
-      (acc, c) =>
-        acc + c.connectors.filter((conn) => conn.status === ConnectorStatus.AVAILABLE).length,
-      0,
-    );
-
-    return {
-      ...station,
-      latitude: Number(station.latitude),
-      longitude: Number(station.longitude),
-      availability: {
-        totalConnectors,
-        availableConnectors,
-        occupiedConnectors: totalConnectors - availableConnectors,
-      },
-      chargers: station.chargers.map((c) => ({
-        ...c,
-        maxPowerKw: Number(c.maxPowerKw),
-        connectors: c.connectors.map((conn) => ({
-          ...conn,
-          maxPowerKw: Number(conn.maxPowerKw),
-        })),
-      })),
-    };
   }
 }

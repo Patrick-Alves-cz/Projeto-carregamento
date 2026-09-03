@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { UserRole } from "@prisma/client";
 import { createChargerSchema, updateChargerSchema } from "@evcharge/shared";
+import { Roles } from "../common/decorators/auth.decorators";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthenticatedUser } from "../common/types/auth.types";
@@ -8,6 +10,7 @@ import { ChargersService } from "./chargers.service";
 
 @ApiTags("chargers")
 @ApiBearerAuth()
+@Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
 @Controller("chargers")
 export class ChargersController {
   constructor(private chargersService: ChargersService) {}

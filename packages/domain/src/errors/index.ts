@@ -70,3 +70,14 @@ export class InsufficientBalanceError extends DomainError {
     this.name = "InsufficientBalanceError";
   }
 }
+
+export class InvalidStateTransitionError extends DomainError {
+  constructor(
+    entity: string,
+    from: string,
+    to: string,
+  ) {
+    super(`Invalid ${entity} status transition: ${from} → ${to}`, "INVALID_STATE_TRANSITION");
+    this.name = "InvalidStateTransitionError";
+  }
+}

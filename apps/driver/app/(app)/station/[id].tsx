@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -19,15 +18,25 @@ import {
   type Station,
   type Vehicle,
 } from "../../../lib/api-client";
+import { driverErrorMessage } from "../../../lib/errors";
 import {
+  accessTypeLabel,
   amenityLabel,
+  availabilityCopy,
   chargerStatusLabel,
   connectorStatusLabel,
+  connectorTypeLabel,
+  ctaLabel,
+  currentTypeLabel,
+  formatCurrency,
+  formatPower,
+  formatRelativeTime,
   isChargerOnline,
   isConnectorOccupied,
   stationStatusColor,
   stationStatusLabel,
 } from "../../../lib/labels";
+import { useRealtime } from "../../../lib/use-realtime";
 import { colors, radius } from "../../../lib/theme";
 
 function connectorColor(status: string) {
@@ -42,100 +51,134 @@ export default function StationDetailScreen() {
   const router = useRouter();
   const [station, setStation] = useState<Station | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [vehicleId, setVehicleId] = useState<string | undefined>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ chargerId: string; connectorId: string } | null>(null);
+
+  const selectedVehicle = vehicles.find((item) => item.id === vehicleId) ?? vehicles.find((item) => item.isDefault) ?? vehicles[0];
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    const [stationData, vehicleData] = await Promise.all([
+      getStation(id, selectedVehicle?.id ?? vehicleId),
+      listVehicles(),
+    ]);
+    setStation(stationData);
+    setVehicles(vehicleData);
+    if (!vehicleId) {
+      const fallback = vehicleData.find((item) => item.isDefault) ?? vehicleData[0];
+      if (fallback) setVehicleId(fallback.id);
+    }
+  }, [id, selectedVehicle?.id, vehicleId]);
 
   useEffect(() => {
-    if (!id) return;
-    Promise.all([getStation(id), listVehicles()])
-      .then(([stationData, vehicleData]) => {
-        setStation(stationData);
-        setVehicles(vehicleData);
+    let cancelled = false;
+    load()
+      .catch((err: unknown) => {
+        if (!cancelled) setError(driverErrorMessage(err));
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Erro ao carregar"))
-      .finally(() => setLoading(false));
-  }, [id]);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
-  function openStart(connectorId: string) {
-    if (vehicles.length === 0) {
-      Alert.alert("Veículo necessário", "Cadastre um veículo antes de iniciar a recarga.");
-      return;
-    }
-    setSelectedConnectorId(connectorId);
-    setPickerOpen(true);
-  }
+  useRealtime(() => {
+    void load();
+  });
 
-  async function confirmStart(vehicleId: string) {
-    if (!selectedConnectorId) return;
+  const confirmCharger = station?.chargers.find((item) => item.id === confirm?.chargerId);
+  const confirmConnector = confirmCharger?.connectors.find((item) => item.id === confirm?.connectorId);
+
+  async function handleStart() {
+    if (!confirmConnector || !selectedVehicle) return;
     setStarting(true);
-    setPickerOpen(false);
     try {
-      const session = await startSession(selectedConnectorId, vehicleId);
+      const session = await startSession(confirmConnector.id, selectedVehicle.id);
+      setConfirm(null);
       router.push(`/charging/${session.id}` as Href);
     } catch (err: unknown) {
-      Alert.alert("Erro", err instanceof Error ? err.message : "Não foi possível iniciar");
+      setError(driverErrorMessage(err));
+      setConfirm(null);
     } finally {
       setStarting(false);
-      setSelectedConnectorId(null);
     }
   }
 
   if (loading) return <ScreenState message="Carregando estação…" />;
-  if (error || !station) return <ScreenState error={error || "Estação não encontrada"} />;
+  if (!station) return <ScreenState error={error || "Estação não encontrada"} />;
 
   const free = station.availability.availableConnectors;
   const total = station.availability.totalConnectors;
-  const maxPower = station.chargers.reduce((acc, charger) => Math.max(acc, charger.maxPowerKw), 0);
+  const current = currentTypeLabel(station.currentType);
 
   return (
     <>
       <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
         <View style={styles.header}>
-          <StatusChip
-            label={stationStatusLabel(station.status)}
-            color={stationStatusColor(station.status)}
-          />
+          <StatusChip label={stationStatusLabel(station.status)} color={stationStatusColor(station.status)} />
           <Text style={styles.name}>{station.name}</Text>
-          <Text style={styles.address}>{station.address}</Text>
+          <Text style={styles.address}>
+            {station.address}
+            {station.city ? ` · ${station.city}` : ""}
+            {station.postalCode ? ` · ${station.postalCode}` : ""}
+          </Text>
+          <Text style={styles.metaLine}>
+            {accessTypeLabel(station.accessType)}
+            {station.openingHoursLabel ? ` · ${station.openingHoursLabel}` : ""}
+          </Text>
           {station.amenities.length > 0 ? (
             <Text style={styles.amenities}>{station.amenities.map(amenityLabel).join(" · ")}</Text>
           ) : null}
         </View>
 
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
         <View style={styles.stats}>
           <View style={styles.stat}>
-            <Text style={styles.statValue}>{station.chargers.length}</Text>
-            <Text style={styles.statLabel}>Carregadores</Text>
+            <Text style={[styles.statValue, station.crowded && styles.full]}>
+              {availabilityCopy(free, total)}
+            </Text>
+            <Text style={styles.statLabel}>Disponibilidade</Text>
+          </View>
+          <View style={styles.stat}>
+            <Text style={styles.statValue}>{current ?? "—"}</Text>
+            <Text style={styles.statLabel}>Tipo</Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>
-              {free}/{total}
+              {station.pricePerKwhCents != null ? formatCurrency(station.pricePerKwhCents) : "—"}
             </Text>
-            <Text style={styles.statLabel}>Livres</Text>
-          </View>
-          <View style={styles.stat}>
-            <Text style={styles.statValue}>{maxPower} kW</Text>
-            <Text style={styles.statLabel}>Máximo</Text>
+            <Text style={styles.statLabel}>por kWh</Text>
           </View>
         </View>
 
-        {starting ? (
-          <View style={styles.starting}>
-            <ActivityIndicator color={colors.primary} />
-            <Text style={styles.startingText}>Iniciando recarga…</Text>
-          </View>
-        ) : null}
+        <Text style={styles.updated}>
+          Última comunicação {formatRelativeTime(station.reliability.lastCommunicationAt)}
+        </Text>
+
+        {selectedVehicle ? (
+          <Text style={styles.vehicleHint}>
+            Veículo: {selectedVehicle.brand} {selectedVehicle.model} ·{" "}
+            {selectedVehicle.connectorTypes.map(connectorTypeLabel).join(", ")}
+          </Text>
+        ) : (
+          <Pressable onPress={() => router.push("/(app)/(tabs)/vehicles")}>
+            <Text style={styles.error}>Cadastre um veículo para ver a compatibilidade.</Text>
+          </Pressable>
+        )}
 
         {station.chargers.map((charger) => (
           <View key={charger.id} style={styles.card}>
             <View style={styles.chargerHead}>
               <View>
-                <Text style={styles.serial}>{charger.serialNumber}</Text>
+                <Text style={styles.serial}>{charger.model ?? charger.serialNumber}</Text>
                 <Text style={styles.meta}>
-                  {charger.model ?? "Carregador"} · {charger.maxPowerKw} kW
+                  {charger.serialNumber} · {formatPower(charger.maxPowerKw)}
                 </Text>
               </View>
               <StatusChip
@@ -144,54 +187,77 @@ export default function StationDetailScreen() {
               />
             </View>
             {charger.connectors.map((connector) => {
-              const canStart = connector.status === "AVAILABLE" && isChargerOnline(charger.status);
+              const canStart = connector.action === "CHARGE";
               return (
-                <Pressable
+                <View
                   key={connector.id}
-                  disabled={!canStart || starting}
-                  onPress={() => openStart(connector.id)}
-                  style={[styles.connector, canStart && styles.connectorTappable]}
+                  style={[
+                    styles.connector,
+                    canStart && styles.connectorReady,
+                    connector.compatible && styles.connectorCompatible,
+                  ]}
                 >
-                  <View>
+                  <View style={styles.connectorInfo}>
                     <Text style={styles.connectorName}>
-                      Conector {connector.number} · {connector.type}
+                      Conector {String(connector.number).padStart(2, "0")} · {connectorTypeLabel(connector.type)}
                     </Text>
-                    <Text style={styles.meta}>{connector.maxPowerKw} kW</Text>
-                    {canStart ? <Text style={styles.tapHint}>Toque para iniciar recarga</Text> : null}
+                    <Text style={styles.meta}>
+                      {formatPower(connector.maxPowerKw)}
+                      {connector.pricePerKwhCents != null
+                        ? ` · ${formatCurrency(connector.pricePerKwhCents)}/kWh`
+                        : ""}
+                    </Text>
+                    {connector.compatible === true ? (
+                      <Text style={styles.ok}>Compatível com seu veículo</Text>
+                    ) : connector.compatible === false ? (
+                      <Text style={styles.bad}>Não compatível</Text>
+                    ) : null}
                   </View>
-                  <StatusChip
-                    color={connectorColor(connector.status)}
-                    label={connectorStatusLabel(connector.status)}
-                  />
-                </Pressable>
+                  <View style={styles.connectorActions}>
+                    <StatusChip color={connectorColor(connector.status)} label={connectorStatusLabel(connector.status)} />
+                    <Pressable
+                      disabled={!canStart || starting}
+                      onPress={() => setConfirm({ chargerId: charger.id, connectorId: connector.id })}
+                      style={[styles.cta, !canStart && styles.ctaDisabled]}
+                    >
+                      <Text style={[styles.ctaText, !canStart && styles.ctaTextDisabled]}>
+                        {ctaLabel(connector.action)}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
               );
             })}
           </View>
         ))}
       </ScrollView>
 
-      <Modal
-        animationType="slide"
-        transparent
-        visible={pickerOpen}
-        onRequestClose={() => setPickerOpen(false)}
-      >
+      <Modal animationType="slide" transparent visible={Boolean(confirm)} onRequestClose={() => setConfirm(null)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Escolha o veículo</Text>
-            {vehicles.map((vehicle) => (
-              <Pressable
-                key={vehicle.id}
-                onPress={() => confirmStart(vehicle.id)}
-                style={styles.vehicleRow}
-              >
-                <Text style={styles.vehicleName}>
-                  {vehicle.brand} {vehicle.model}
-                </Text>
-                <Text style={styles.meta}>{vehicle.connectorTypes.join(", ")}</Text>
-              </Pressable>
-            ))}
-            <Pressable onPress={() => setPickerOpen(false)} style={styles.cancelBtn}>
+            <Text style={styles.modalTitle}>Confirmar recarga</Text>
+            <Text style={styles.modalName}>{station.name}</Text>
+            <Text style={styles.meta}>Carregador {confirmCharger?.serialNumber}</Text>
+            <Text style={styles.modalLine}>
+              {confirmConnector ? connectorTypeLabel(confirmConnector.type) : ""} ·{" "}
+              {confirmConnector ? formatPower(confirmConnector.maxPowerKw) : ""}
+            </Text>
+            <Text style={styles.modalLine}>
+              {confirmConnector?.pricePerKwhCents != null
+                ? `${formatCurrency(confirmConnector.pricePerKwhCents)} / kWh`
+                : "Tarifa da estação"}
+            </Text>
+            <Text style={styles.modalLine}>
+              Veículo: {selectedVehicle ? `${selectedVehicle.brand} ${selectedVehicle.model}` : "Não selecionado"}
+            </Text>
+            <Pressable disabled={starting || !selectedVehicle} onPress={() => void handleStart()} style={styles.confirm}>
+              {starting ? (
+                <ActivityIndicator color={colors.primaryText} />
+              ) : (
+                <Text style={styles.confirmText}>Confirmar recarga</Text>
+              )}
+            </Pressable>
+            <Pressable onPress={() => setConfirm(null)} style={styles.cancelBtn}>
               <Text style={styles.cancelText}>Cancelar</Text>
             </Pressable>
           </View>
@@ -203,11 +269,13 @@ export default function StationDetailScreen() {
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.bg, flex: 1 },
-  content: { gap: 16, padding: 16, paddingBottom: 32 },
+  content: { gap: 16, padding: 16, paddingBottom: 40 },
   header: { gap: 8 },
   name: { color: colors.text, fontSize: 24, fontWeight: "700" },
   address: { color: colors.muted, fontSize: 14, lineHeight: 20 },
+  metaLine: { color: colors.muted, fontSize: 13 },
   amenities: { color: colors.primary, fontSize: 13, fontWeight: "600" },
+  error: { color: colors.danger, fontSize: 14 },
   stats: { flexDirection: "row", gap: 8 },
   stat: {
     backgroundColor: colors.card,
@@ -217,10 +285,11 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 12,
   },
-  statValue: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  statValue: { color: colors.text, fontSize: 15, fontWeight: "700" },
+  full: { color: colors.amber },
   statLabel: { color: colors.muted, fontSize: 12, marginTop: 4 },
-  starting: { alignItems: "center", flexDirection: "row", gap: 8, justifyContent: "center" },
-  startingText: { color: colors.primary, fontSize: 14 },
+  updated: { color: colors.muted, fontSize: 12 },
+  vehicleHint: { color: colors.text, fontSize: 14, fontWeight: "600" },
   card: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -229,25 +298,33 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 16,
   },
-  chargerHead: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
+  chargerHead: { flexDirection: "row", gap: 8, justifyContent: "space-between" },
   serial: { color: colors.text, fontSize: 15, fontWeight: "700" },
   meta: { color: colors.muted, fontSize: 13, marginTop: 2 },
   connector: {
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 10,
     padding: 12,
   },
-  connectorTappable: { borderColor: colors.primary },
+  connectorReady: { borderColor: colors.primary },
+  connectorCompatible: { backgroundColor: "rgba(94,234,212,0.04)" },
+  connectorInfo: { gap: 2 },
   connectorName: { color: colors.text, fontSize: 14, fontWeight: "600" },
-  tapHint: { color: colors.primary, fontSize: 12, marginTop: 4 },
-  modalBackdrop: {
-    backgroundColor: "rgba(0,0,0,0.6)",
-    flex: 1,
-    justifyContent: "flex-end",
+  ok: { color: colors.available, fontSize: 12, fontWeight: "600", marginTop: 4 },
+  bad: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  connectorActions: { gap: 8 },
+  cta: {
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 12,
   },
+  ctaDisabled: { backgroundColor: colors.cardAlt },
+  ctaText: { color: colors.primaryText, fontSize: 14, fontWeight: "700" },
+  ctaTextDisabled: { color: colors.muted },
+  modalBackdrop: { backgroundColor: "rgba(0,0,0,0.6)", flex: 1, justifyContent: "flex-end" },
   modalCard: {
     backgroundColor: colors.card,
     borderTopLeftRadius: radius.lg,
@@ -255,14 +332,17 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 20,
   },
-  modalTitle: { color: colors.text, fontSize: 18, fontWeight: "700", marginBottom: 8 },
-  vehicleRow: {
-    borderColor: colors.border,
+  modalTitle: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  modalName: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  modalLine: { color: colors.text, fontSize: 15 },
+  confirm: {
+    alignItems: "center",
+    backgroundColor: colors.primary,
     borderRadius: radius.md,
-    borderWidth: 1,
-    padding: 14,
+    marginTop: 8,
+    paddingVertical: 14,
   },
-  vehicleName: { color: colors.text, fontSize: 15, fontWeight: "600" },
-  cancelBtn: { alignItems: "center", marginTop: 8, padding: 12 },
+  confirmText: { color: colors.primaryText, fontSize: 16, fontWeight: "700" },
+  cancelBtn: { alignItems: "center", padding: 12 },
   cancelText: { color: colors.muted, fontSize: 15 },
 });

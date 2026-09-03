@@ -17,6 +17,7 @@ import {
   ConnectorUnavailableError,
   InsufficientBalanceError,
   SessionStateError,
+  InvalidStateTransitionError,
 } from "@evcharge/domain";
 
 @Catch()
@@ -93,6 +94,14 @@ export class DomainExceptionFilter implements ExceptionFilter {
     }
 
     if (exception instanceof SessionStateError) {
+      response.status(HttpStatus.CONFLICT).json({
+        code: exception.code,
+        message: exception.message,
+      });
+      return;
+    }
+
+    if (exception instanceof InvalidStateTransitionError) {
       response.status(HttpStatus.CONFLICT).json({
         code: exception.code,
         message: exception.message,

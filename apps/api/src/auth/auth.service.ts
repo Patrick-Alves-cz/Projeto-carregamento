@@ -1,20 +1,19 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
+import { randomBytes } from "crypto";
 import { UserRole, UserStatus, CompanyMemberRole } from "@prisma/client";
-import {
-  ConflictError,
-  UnauthorizedError,
-  ValidationError,
-} from "@evcharge/domain";
+import { ConflictError, UnauthorizedError } from "@evcharge/domain";
 import type { LoginInput, RegisterInput } from "@evcharge/shared";
 import { PrismaService } from "../common/database/database.module";
 import { JwtPayload } from "../common/types/auth.types";
+import { AuditLogger } from "../common/logging/audit-logger";
 import {
   generateRefreshToken,
   hashToken,
   parseDurationToMs,
 } from "../common/utils/token.util";
+import { getJwtAccessExpiresIn } from "../common/config/jwt-secrets";
 
 @Injectable()
 export class AuthService {
@@ -22,6 +21,7 @@ export class AuthService {
   private readonly refreshExpiresMs = parseDurationToMs(
     process.env.JWT_REFRESH_EXPIRES_IN ?? "7d",
   );
+  private readonly audit = new AuditLogger(new Logger(AuthService.name));
 
   constructor(
     private prisma: PrismaService,
@@ -34,59 +34,26 @@ export class AuthService {
     });
     if (existing) throw new ConflictError("Email already registered");
 
-    if (input.role === UserRole.SUPER_ADMIN) {
-      throw new ValidationError("Cannot self-register as super_admin");
-    }
-
-    if (input.company && input.role === UserRole.DRIVER) {
-      throw new ValidationError("Drivers cannot register with a company");
-    }
-
-    if (
-      (input.role === UserRole.OPERATOR || input.role === UserRole.ADMIN) &&
-      !input.company
-    ) {
-      throw new ValidationError("Operators and admins must provide company data");
-    }
-
     const passwordHash = await bcrypt.hash(input.password, this.bcryptRounds);
 
-    const user = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: {
-          email: input.email.toLowerCase(),
-          passwordHash,
-          role: input.role,
-          profile: {
-            create: { fullName: input.fullName },
-          },
+    const user = await this.prisma.user.create({
+      data: {
+        email: input.email.toLowerCase(),
+        passwordHash,
+        role: UserRole.DRIVER,
+        profile: {
+          create: { fullName: input.fullName, phone: input.phone },
         },
-        include: { profile: true, companyMembers: { include: { company: true } } },
-      });
-
-      if (input.company) {
-        await tx.companyMember.create({
-          data: {
-            userId: created.id,
-            companyId: (
-              await tx.company.create({ data: input.company })
-            ).id,
-            role: CompanyMemberRole.OWNER,
-          },
-        });
-      }
-
-      return tx.user.findUniqueOrThrow({
-        where: { id: created.id },
-        include: {
-          profile: true,
-          companyMembers: { include: { company: true } },
+        wallet: {
+          create: { balanceCents: 10000, currency: "BRL" },
         },
-      });
+      },
+      include: { profile: true, companyMembers: { include: { company: true } } },
     });
 
-    const tokens = await this.issueTokens(user!);
-    return { user: this.sanitizeUser(user!), ...tokens };
+    this.audit.info("auth.register.success", { userId: user.id, email: user.email, role: user.role });
+    const tokens = await this.issueTokens(user);
+    return { user: this.sanitizeUser(user), ...tokens };
   }
 
   async login(input: LoginInput) {
@@ -99,13 +66,18 @@ export class AuthService {
     });
 
     if (!user || user.status !== UserStatus.ACTIVE) {
+      this.audit.warn("auth.login.failure", { email: input.email.toLowerCase() });
       throw new UnauthorizedError("Invalid credentials");
     }
 
     const valid = await bcrypt.compare(input.password, user.passwordHash);
-    if (!valid) throw new UnauthorizedError("Invalid credentials");
+    if (!valid) {
+      this.audit.warn("auth.login.failure", { email: user.email, userId: user.id });
+      throw new UnauthorizedError("Invalid credentials");
+    }
 
     const tokens = await this.issueTokens(user);
+    this.audit.info("auth.login.success", { userId: user.id, email: user.email, role: user.role });
     return { user: this.sanitizeUser(user), ...tokens };
   }
 
@@ -123,30 +95,61 @@ export class AuthService {
       },
     });
 
-    if (
-      !stored ||
-      stored.revokedAt ||
-      stored.expiresAt < new Date() ||
-      stored.user.status !== UserStatus.ACTIVE
-    ) {
+    if (!stored) {
+      this.audit.warn("auth.refresh.failure", { reason: "unknown_token" });
       throw new UnauthorizedError("Invalid refresh token");
     }
 
+    if (stored.revokedAt) {
+      await this.prisma.refreshToken.updateMany({
+        where: { familyId: stored.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.prisma.securityEvent.create({
+        data: {
+          userId: stored.userId,
+          type: "auth.refresh.reuse",
+          payload: { familyId: stored.familyId },
+        },
+      });
+      this.audit.warn("auth.refresh.reuse", {
+        userId: stored.userId,
+        familyId: stored.familyId,
+      });
+      throw new UnauthorizedError("Refresh token reuse detected");
+    }
+
+    if (stored.expiresAt < new Date() || stored.user.status !== UserStatus.ACTIVE) {
+      await this.prisma.refreshToken.update({
+        where: { id: stored.id },
+        data: { revokedAt: new Date() },
+      });
+      this.audit.warn("auth.refresh.failure", {
+        userId: stored.userId,
+        reason: "expired_or_inactive",
+      });
+      throw new UnauthorizedError("Invalid refresh token");
+    }
+
+    const tokens = await this.issueTokens(stored.user, stored.familyId);
     await this.prisma.refreshToken.update({
       where: { id: stored.id },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: new Date(), replacedById: tokens.refreshTokenId },
     });
 
-    const tokens = await this.issueTokens(stored.user);
+    this.audit.info("auth.refresh.success", { userId: stored.userId, familyId: stored.familyId });
     return { user: this.sanitizeUser(stored.user), ...tokens };
   }
 
   async logout(refreshToken: string) {
     const tokenHash = hashToken(refreshToken);
-    await this.prisma.refreshToken.updateMany({
-      where: { tokenHash, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
+    if (stored) {
+      await this.prisma.refreshToken.updateMany({
+        where: { familyId: stored.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
     return { success: true };
   }
 
@@ -162,12 +165,15 @@ export class AuthService {
     return this.sanitizeUser(user);
   }
 
-  private async issueTokens(user: {
-    id: string;
-    email: string;
-    role: UserRole;
-    companyMembers: { companyId: string }[];
-  }) {
+  private async issueTokens(
+    user: {
+      id: string;
+      email: string;
+      role: UserRole;
+      companyMembers: { companyId: string }[];
+    },
+    familyId?: string,
+  ) {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
@@ -178,10 +184,12 @@ export class AuthService {
     const accessToken = await this.jwtService.signAsync(payload);
     const refreshToken = generateRefreshToken();
     const expiresAt = new Date(Date.now() + this.refreshExpiresMs);
+    const resolvedFamilyId = familyId ?? randomBytes(16).toString("hex");
 
-    await this.prisma.refreshToken.create({
+    const created = await this.prisma.refreshToken.create({
       data: {
         userId: user.id,
+        familyId: resolvedFamilyId,
         tokenHash: hashToken(refreshToken),
         expiresAt,
       },
@@ -190,7 +198,8 @@ export class AuthService {
     return {
       accessToken,
       refreshToken,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? "15m",
+      refreshTokenId: created.id,
+      expiresIn: getJwtAccessExpiresIn(),
     };
   }
 
@@ -209,7 +218,13 @@ export class AuthService {
       role: user.role,
       status: user.status,
       createdAt: user.createdAt,
-      profile: user.profile,
+      profile: user.profile
+        ? {
+            fullName: user.profile.fullName,
+            phone: user.profile.phone,
+            avatarUrl: user.profile.avatarUrl,
+          }
+        : null,
       companies: user.companyMembers.map((m) => ({
         memberRole: m.role,
         ...m.company,

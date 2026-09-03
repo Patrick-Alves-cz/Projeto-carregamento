@@ -47,6 +47,11 @@ describeIfDb("Charging Sessions E2E", () => {
       throw new Error("Demo seed missing. Run `pnpm db:seed` before API E2E tests.");
     }
 
+    await prisma.connector.updateMany({
+      where: { charger: { status: "OFFLINE" } },
+      data: { status: "UNAVAILABLE" },
+    });
+
     const login = await request(app.getHttpServer())
       .post("/api/auth/login")
       .send({ email: "driver1@evcharge.demo", password: "Demo@12345" });
@@ -86,11 +91,18 @@ describeIfDb("Charging Sessions E2E", () => {
       where: { user: { email: { endsWith: "@evcharge.demo" } } },
     });
     await prisma.connector.updateMany({
-      where: { status: { not: "FAULTED" } },
+      where: {
+        charger: { status: { notIn: ["OFFLINE", "FAULTED"] } },
+        status: { in: ["PREPARING", "CHARGING", "SUSPENDED", "FINISHING"] },
+      },
       data: { status: "AVAILABLE" },
     });
+    await prisma.connector.updateMany({
+      where: { charger: { status: "OFFLINE" } },
+      data: { status: "UNAVAILABLE" },
+    });
     await prisma.charger.updateMany({
-      where: { status: { notIn: ["OFFLINE", "FAULTED"] } },
+      where: { status: { in: ["PREPARING", "CHARGING", "SUSPENDED", "FINISHING"] } },
       data: { status: "AVAILABLE" },
     });
     await app.close();
@@ -156,7 +168,10 @@ describeIfDb("Charging Sessions E2E", () => {
 
   it("rejects offline connector", async () => {
     const offlineConnector = await prisma.connector.findFirst({
-      where: { charger: { status: "OFFLINE" }, status: "UNAVAILABLE" },
+      where: {
+        type: "CCS2",
+        charger: { status: { in: ["OFFLINE", "FAULTED"] } },
+      },
     });
     assert.ok(offlineConnector);
 

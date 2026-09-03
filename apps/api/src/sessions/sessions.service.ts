@@ -1,6 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
+  assertChargerStatusTransition,
+  assertConnectorStatusTransition,
   assertSessionStatusTransition,
+  assertVehicleConnectorCompatibility,
   ConflictError,
   ConnectorUnavailableError,
   ForbiddenError,
@@ -25,6 +28,7 @@ import { AuthenticatedUser } from "../common/types/auth.types";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { ChargerProviderService } from "../charging/charger-provider.service";
 import { WalletService } from "../wallet/wallet.service";
+import { AuditLogger } from "../common/logging/audit-logger";
 
 const sessionInclude = {
   user: { include: { profile: true } },
@@ -42,9 +46,19 @@ const sessionInclude = {
   payment: true,
 } satisfies Prisma.ChargingSessionInclude;
 
+const ACTIVE_STATUSES: SessionStatus[] = [
+  SessionStatus.PENDING,
+  SessionStatus.PREPARING,
+  SessionStatus.ACTIVE,
+  SessionStatus.PAUSED,
+];
+
+type SessionWithInclude = Prisma.ChargingSessionGetPayload<{ include: typeof sessionInclude }>;
+
 @Injectable()
 export class SessionsService {
   private readonly logger = new Logger(SessionsService.name);
+  private readonly audit = new AuditLogger(this.logger);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -56,12 +70,13 @@ export class SessionsService {
 
   async start(input: StartSessionInput, user: AuthenticatedUser) {
     if (user.role !== UserRole.DRIVER) {
+      this.audit.warn("authorization.denied", { userId: user.id, action: "session.start" });
       throw new ForbiddenError("Apenas motoristas podem iniciar recargas");
     }
 
     if (input.idempotencyKey) {
-      const existing = await this.prisma.chargingSession.findUnique({
-        where: { idempotencyKey: input.idempotencyKey },
+      const existing = await this.prisma.chargingSession.findFirst({
+        where: { userId: user.id, idempotencyKey: input.idempotencyKey },
         include: sessionInclude,
       });
       if (existing) return this.enrichSession(existing);
@@ -77,6 +92,8 @@ export class SessionsService {
       include: { charger: { include: { station: true } } },
     });
     if (!connectorSnapshot) throw new NotFoundError("Connector", input.connectorId);
+
+    assertVehicleConnectorCompatibility(vehicle.connectorTypes, connectorSnapshot.type);
 
     const { charger } = connectorSnapshot;
     if (charger.status === ChargerStatus.OFFLINE || charger.status === ChargerStatus.FAULTED) {
@@ -101,32 +118,48 @@ export class SessionsService {
       currency: activeTariff.currency,
     };
 
+    const companyId = charger.station.companyId;
     let sessionId: string | null = null;
+    let lockedConnector = false;
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT id FROM connectors WHERE id = ${input.connectorId} FOR UPDATE
+        `;
+
         const lock = await tx.connector.updateMany({
           where: {
             id: input.connectorId,
             status: ConnectorStatus.AVAILABLE,
             charger: {
-              status: { in: [ChargerStatus.AVAILABLE, ChargerStatus.CHARGING] },
+              status: { in: [ChargerStatus.AVAILABLE, ChargerStatus.CHARGING, ChargerStatus.SUSPENDED] },
             },
           },
           data: { status: ConnectorStatus.PREPARING },
         });
 
         if (lock.count === 0) {
+          this.audit.warn("connector.conflict", {
+            userId: user.id,
+            connectorId: input.connectorId,
+          });
           throw new ConnectorUnavailableError("Conector indisponível ou já reservado");
         }
+        lockedConnector = true;
 
         const activeOnConnector = await tx.chargingSession.findFirst({
           where: {
             connectorId: input.connectorId,
-            status: { in: [SessionStatus.PENDING, SessionStatus.ACTIVE, SessionStatus.PAUSED] },
+            status: { in: ACTIVE_STATUSES },
           },
         });
         if (activeOnConnector) {
+          this.audit.warn("connector.conflict", {
+            userId: user.id,
+            connectorId: input.connectorId,
+            sessionId: activeOnConnector.id,
+          });
           throw new ConflictError("Já existe uma sessão ativa neste conector");
         }
 
@@ -142,10 +175,19 @@ export class SessionsService {
           },
         });
 
-        await tx.charger.update({
-          where: { id: charger.id },
-          data: { status: ChargerStatus.PREPARING },
+        assertSessionStatusTransition(session.status, SessionStatus.PREPARING);
+        await tx.chargingSession.update({
+          where: { id: session.id },
+          data: { status: SessionStatus.PREPARING },
         });
+
+        if (charger.status === ChargerStatus.AVAILABLE) {
+          assertChargerStatusTransition(charger.status, ChargerStatus.PREPARING);
+          await tx.charger.update({
+            where: { id: charger.id },
+            data: { status: ChargerStatus.PREPARING },
+          });
+        }
 
         return session;
       });
@@ -159,30 +201,39 @@ export class SessionsService {
       );
 
       const activeSession = await this.prisma.$transaction(async (tx) => {
+        const current = await tx.chargingSession.findUniqueOrThrow({ where: { id: created.id } });
+        assertSessionStatusTransition(current.status, SessionStatus.ACTIVE);
+
         const updated = await tx.chargingSession.update({
           where: { id: created.id },
           data: { status: SessionStatus.ACTIVE, startedAt: new Date() },
           include: sessionInclude,
         });
 
+        const connector = await tx.connector.findUniqueOrThrow({ where: { id: input.connectorId } });
+        assertConnectorStatusTransition(connector.status, ConnectorStatus.CHARGING);
         await tx.connector.update({
           where: { id: input.connectorId },
           data: { status: ConnectorStatus.CHARGING },
         });
 
-        await tx.charger.update({
-          where: { id: charger.id },
-          data: { status: ChargerStatus.CHARGING, lastSeenAt: new Date() },
-        });
+        const chargerRow = await tx.charger.findUniqueOrThrow({ where: { id: charger.id } });
+        if (chargerRow.status !== ChargerStatus.CHARGING) {
+          assertChargerStatusTransition(chargerRow.status, ChargerStatus.CHARGING);
+          await tx.charger.update({
+            where: { id: charger.id },
+            data: { status: ChargerStatus.CHARGING, lastSeenAt: new Date() },
+          });
+        }
 
         return updated;
       });
 
-      this.logger.log({
-        action: "session.start",
+      this.audit.info("session.start", {
         sessionId: activeSession.id,
         userId: user.id,
         connectorId: input.connectorId,
+        companyId,
       });
 
       await this.events.publish({
@@ -195,14 +246,35 @@ export class SessionsService {
           status: SessionStatus.ACTIVE,
           userId: user.id,
           connectorId: input.connectorId,
+          companyId,
         },
       });
 
       return this.enrichSession(activeSession);
     } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" &&
+        input.idempotencyKey
+      ) {
+        const existing = await this.prisma.chargingSession.findFirst({
+          where: { userId: user.id, idempotencyKey: input.idempotencyKey },
+          include: sessionInclude,
+        });
+        if (existing) return this.enrichSession(existing);
+      }
+
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        this.audit.warn("connector.conflict", {
+          userId: user.id,
+          connectorId: input.connectorId,
+        });
+        throw new ConnectorUnavailableError("Conector indisponível ou já reservado");
+      }
+
       if (sessionId) {
         await this.rollbackFailedStart(sessionId, input.connectorId, charger.id);
-      } else {
+      } else if (lockedConnector) {
         await this.prisma.connector.updateMany({
           where: { id: input.connectorId, status: ConnectorStatus.PREPARING },
           data: { status: ConnectorStatus.AVAILABLE },
@@ -212,7 +284,7 @@ export class SessionsService {
     }
   }
 
-  async stop(sessionId: string, user: AuthenticatedUser) {
+  async stop(sessionId: string, user: AuthenticatedUser, idempotencyKey?: string) {
     const session = await this.prisma.chargingSession.findUnique({
       where: { id: sessionId },
       include: sessionInclude,
@@ -220,6 +292,10 @@ export class SessionsService {
     if (!session) throw new NotFoundError("ChargingSession", sessionId);
 
     this.assertSessionAccess(session, user);
+
+    if (idempotencyKey && session.stopIdempotencyKey === idempotencyKey) {
+      return this.enrichSession(session);
+    }
 
     if (!isSessionActive(session.status)) {
       throw new SessionStateError(`Sessão não está ativa (${session.status})`);
@@ -236,9 +312,14 @@ export class SessionsService {
       session,
       SessionStatus.COMPLETED,
       SessionStopReason.USER_STOP,
+      idempotencyKey,
     );
 
-    this.logger.log({ action: "session.stop", sessionId, userId: user.id });
+    this.audit.info("session.stop", {
+      sessionId,
+      userId: user.id,
+      companyId: session.connector.charger.station.companyId,
+    });
 
     await this.events.publish({
       type: "session.completed",
@@ -250,6 +331,7 @@ export class SessionsService {
         status: SessionStatus.COMPLETED,
         userId: session.userId,
         connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
         energyKwh: Number(completed.energyKwh),
         costCents: completed.costCents,
       },
@@ -259,13 +341,32 @@ export class SessionsService {
   }
 
   async pause(sessionId: string, user: AuthenticatedUser) {
-    const session = await this.getActiveSessionOrThrow(sessionId, user);
+    const session = await this.getOwnedSessionOrThrow(sessionId, user);
+    if (session.status !== SessionStatus.ACTIVE) {
+      throw new SessionStateError("Sessão não está ativa");
+    }
     assertSessionStatusTransition(session.status, "PAUSED");
 
-    const updated = await this.prisma.chargingSession.update({
-      where: { id: sessionId },
-      data: { status: SessionStatus.PAUSED, pausedAt: new Date() },
-      include: sessionInclude,
+    await this.chargerProviderService.provider.pauseCharging(
+      session.connector.chargerId,
+      session.connector.number,
+    );
+
+    const connector = session.connector;
+    assertConnectorStatusTransition(connector.status, ConnectorStatus.SUSPENDED);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.chargingSession.update({
+        where: { id: sessionId },
+        data: { status: SessionStatus.PAUSED, pausedAt: new Date() },
+        include: sessionInclude,
+      });
+      await tx.connector.update({
+        where: { id: connector.id },
+        data: { status: ConnectorStatus.SUSPENDED },
+      });
+      await this.syncChargerStatus(tx, connector.chargerId);
+      return next;
     });
 
     await this.events.publish({
@@ -273,23 +374,53 @@ export class SessionsService {
       entityType: "session",
       entityId: sessionId,
       timestamp: new Date(),
-      payload: { sessionId, status: SessionStatus.PAUSED },
+      payload: {
+        sessionId,
+        status: SessionStatus.PAUSED,
+        userId: session.userId,
+        connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
+      },
     });
 
     return this.enrichSession(updated);
   }
 
   async resume(sessionId: string, user: AuthenticatedUser) {
-    const session = await this.getActiveSessionOrThrow(sessionId, user);
+    const session = await this.getOwnedSessionOrThrow(sessionId, user);
     if (session.status !== SessionStatus.PAUSED) {
       throw new SessionStateError("Sessão não está pausada");
     }
     assertSessionStatusTransition("PAUSED", "ACTIVE");
 
-    const updated = await this.prisma.chargingSession.update({
-      where: { id: sessionId },
-      data: { status: SessionStatus.ACTIVE, pausedAt: null },
-      include: sessionInclude,
+    await this.chargerProviderService.provider.resumeCharging(
+      session.connector.chargerId,
+      session.connector.number,
+    );
+
+    assertConnectorStatusTransition(session.connector.status, ConnectorStatus.CHARGING);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.chargingSession.update({
+        where: { id: sessionId },
+        data: { status: SessionStatus.ACTIVE, pausedAt: null },
+        include: sessionInclude,
+      });
+      await tx.connector.update({
+        where: { id: session.connectorId },
+        data: { status: ConnectorStatus.CHARGING },
+      });
+      const charger = await tx.charger.findUniqueOrThrow({
+        where: { id: session.connector.chargerId },
+      });
+      if (charger.status !== ChargerStatus.CHARGING) {
+        assertChargerStatusTransition(charger.status, ChargerStatus.CHARGING);
+        await tx.charger.update({
+          where: { id: charger.id },
+          data: { status: ChargerStatus.CHARGING, lastSeenAt: new Date() },
+        });
+      }
+      return next;
     });
 
     await this.events.publish({
@@ -297,7 +428,13 @@ export class SessionsService {
       entityType: "session",
       timestamp: new Date(),
       entityId: sessionId,
-      payload: { sessionId, status: SessionStatus.ACTIVE },
+      payload: {
+        sessionId,
+        status: SessionStatus.ACTIVE,
+        userId: session.userId,
+        connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
+      },
     });
 
     return this.enrichSession(updated);
@@ -374,7 +511,7 @@ export class SessionsService {
     this.tenantAccess.assertOperatorOrAbove(user);
 
     const where: Prisma.ChargingSessionWhereInput = {
-      status: { in: [SessionStatus.PENDING, SessionStatus.ACTIVE, SessionStatus.PAUSED] },
+      status: { in: ACTIVE_STATUSES },
     };
 
     if (!this.tenantAccess.isSuperAdmin(user)) {
@@ -392,16 +529,60 @@ export class SessionsService {
     return sessions.map((s) => this.enrichSession(s));
   }
 
-  private async getActiveSessionOrThrow(sessionId: string, user: AuthenticatedUser) {
+  async reconcileOrphanSessions(maxAgeMs = Number(process.env.ORPHAN_SESSION_TIMEOUT_MS ?? 60_000)) {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const orphans = await this.prisma.chargingSession.findMany({
+      where: {
+        status: { in: [SessionStatus.PENDING, SessionStatus.PREPARING] },
+        createdAt: { lte: cutoff },
+      },
+      include: { connector: true },
+    });
+
+    for (const session of orphans) {
+      try {
+        assertSessionStatusTransition(session.status, SessionStatus.FAILED);
+        await this.prisma.$transaction(async (tx) => {
+          await tx.chargingSession.update({
+            where: { id: session.id },
+            data: {
+              status: SessionStatus.FAILED,
+              stopReason: SessionStopReason.TIMEOUT,
+              endedAt: new Date(),
+            },
+          });
+          const connector = await tx.connector.findUniqueOrThrow({
+            where: { id: session.connectorId },
+          });
+          if (connector.status === ConnectorStatus.PREPARING) {
+            assertConnectorStatusTransition(connector.status, ConnectorStatus.AVAILABLE);
+            await tx.connector.update({
+              where: { id: connector.id },
+              data: { status: ConnectorStatus.AVAILABLE },
+            });
+          }
+          await this.syncChargerStatus(tx, session.connector.chargerId);
+        });
+
+        this.audit.warn("session.orphan.reconciled", {
+          sessionId: session.id,
+          previousStatus: session.status,
+        });
+      } catch (error) {
+        this.logger.error(`Failed to reconcile orphan session ${session.id}`, error);
+      }
+    }
+
+    return orphans.length;
+  }
+
+  private async getOwnedSessionOrThrow(sessionId: string, user: AuthenticatedUser) {
     const session = await this.prisma.chargingSession.findUnique({
       where: { id: sessionId },
       include: sessionInclude,
     });
     if (!session) throw new NotFoundError("ChargingSession", sessionId);
     this.assertSessionAccess(session, user);
-    if (!isSessionActive(session.status)) {
-      throw new SessionStateError("Sessão não está ativa");
-    }
     return session;
   }
 
@@ -411,6 +592,7 @@ export class SessionsService {
   ) {
     if (user.role === UserRole.DRIVER) {
       if (session.userId !== user.id) {
+        this.audit.warn("authorization.denied", { userId: user.id, action: "session.access" });
         throw new ForbiddenError("Acesso negado à sessão de outro usuário");
       }
       return;
@@ -422,26 +604,31 @@ export class SessionsService {
   }
 
   private async finalizeSessionRecord(
-    session: Prisma.ChargingSessionGetPayload<{ include: typeof sessionInclude }>,
+    session: SessionWithInclude,
     status: SessionStatus,
     stopReason: SessionStopReason,
+    stopIdempotencyKey?: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      const current = await tx.chargingSession.findUniqueOrThrow({ where: { id: session.id } });
+      assertSessionStatusTransition(current.status, status);
+
       const updated = await tx.chargingSession.update({
         where: { id: session.id },
-        data: { status, stopReason, endedAt: new Date() },
+        data: { status, stopReason, endedAt: new Date(), stopIdempotencyKey },
         include: sessionInclude,
       });
 
-      await tx.connector.update({
-        where: { id: session.connectorId },
-        data: { status: ConnectorStatus.AVAILABLE },
-      });
+      const connector = await tx.connector.findUniqueOrThrow({ where: { id: session.connectorId } });
+      if (connector.status !== ConnectorStatus.AVAILABLE) {
+        assertConnectorStatusTransition(connector.status, ConnectorStatus.AVAILABLE);
+        await tx.connector.update({
+          where: { id: session.connectorId },
+          data: { status: ConnectorStatus.AVAILABLE },
+        });
+      }
 
-      await tx.charger.update({
-        where: { id: session.connector.chargerId },
-        data: { status: ChargerStatus.AVAILABLE, lastSeenAt: new Date() },
-      });
+      await this.syncChargerStatus(tx, session.connector.chargerId);
 
       const existingPayment = await tx.payment.findUnique({
         where: { sessionId: session.id },
@@ -463,33 +650,78 @@ export class SessionsService {
     });
   }
 
+  private async syncChargerStatus(tx: Prisma.TransactionClient, chargerId: string) {
+    const charger = await tx.charger.findUniqueOrThrow({
+      where: { id: chargerId },
+      include: { connectors: true },
+    });
+    const connectors = charger.connectors;
+
+    let next: ChargerStatus = ChargerStatus.AVAILABLE;
+    if (connectors.some((c) => c.status === ConnectorStatus.CHARGING)) {
+      next = ChargerStatus.CHARGING;
+    } else if (connectors.some((c) => c.status === ConnectorStatus.PREPARING)) {
+      next = ChargerStatus.PREPARING;
+    } else if (connectors.some((c) => c.status === ConnectorStatus.SUSPENDED)) {
+      next = ChargerStatus.SUSPENDED;
+    } else if (connectors.some((c) => c.status === ConnectorStatus.FINISHING)) {
+      next = ChargerStatus.FINISHING;
+    } else if (connectors.every((c) => c.status === ConnectorStatus.FAULTED) && connectors.length > 0) {
+      next = ChargerStatus.FAULTED;
+    } else if (
+      connectors.every((c) => c.status === ConnectorStatus.UNAVAILABLE) &&
+      charger.status === ChargerStatus.OFFLINE
+    ) {
+      next = ChargerStatus.OFFLINE;
+    }
+
+    if (next === charger.status) {
+      await tx.charger.update({
+        where: { id: chargerId },
+        data: { lastSeenAt: new Date() },
+      });
+      return;
+    }
+
+    assertChargerStatusTransition(charger.status, next);
+    await tx.charger.update({
+      where: { id: chargerId },
+      data: { status: next, lastSeenAt: new Date() },
+    });
+  }
+
   private async rollbackFailedStart(
     sessionId: string,
     connectorId: string,
     chargerId: string,
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      await tx.chargingSession.updateMany({
-        where: { id: sessionId, status: SessionStatus.PENDING },
-        data: {
-          status: SessionStatus.FAILED,
-          endedAt: new Date(),
-          stopReason: SessionStopReason.FAULT,
-        },
-      });
-      await tx.connector.updateMany({
-        where: { id: connectorId },
-        data: { status: ConnectorStatus.AVAILABLE },
-      });
-      await tx.charger.updateMany({
-        where: { id: chargerId },
-        data: { status: ChargerStatus.AVAILABLE },
-      });
+      const session = await tx.chargingSession.findUnique({ where: { id: sessionId } });
+      if (session && (session.status === SessionStatus.PENDING || session.status === SessionStatus.PREPARING)) {
+        assertSessionStatusTransition(session.status, SessionStatus.FAILED);
+        await tx.chargingSession.update({
+          where: { id: sessionId },
+          data: {
+            status: SessionStatus.FAILED,
+            endedAt: new Date(),
+            stopReason: SessionStopReason.FAULT,
+          },
+        });
+      }
+      const connector = await tx.connector.findUnique({ where: { id: connectorId } });
+      if (connector && connector.status === ConnectorStatus.PREPARING) {
+        assertConnectorStatusTransition(connector.status, ConnectorStatus.AVAILABLE);
+        await tx.connector.update({
+          where: { id: connectorId },
+          data: { status: ConnectorStatus.AVAILABLE },
+        });
+      }
+      await this.syncChargerStatus(tx, chargerId);
     });
   }
 
   private enrichSession(
-    session: Prisma.ChargingSessionGetPayload<{ include: typeof sessionInclude }> & {
+    session: SessionWithInclude & {
       meterValues?: Array<{
         id: string;
         timestamp: Date;

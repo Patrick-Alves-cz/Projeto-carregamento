@@ -1,5 +1,8 @@
+import { InvalidStateTransitionError } from "../errors";
+
 export const SESSION_STATUSES = [
   "PENDING",
+  "PREPARING",
   "ACTIVE",
   "PAUSED",
   "COMPLETED",
@@ -10,7 +13,8 @@ export const SESSION_STATUSES = [
 export type SessionOperationalStatus = (typeof SESSION_STATUSES)[number];
 
 const VALID_TRANSITIONS: Record<SessionOperationalStatus, SessionOperationalStatus[]> = {
-  PENDING: ["ACTIVE", "FAILED", "CANCELLED"],
+  PENDING: ["PREPARING", "ACTIVE", "FAILED", "CANCELLED"],
+  PREPARING: ["ACTIVE", "FAILED", "CANCELLED"],
   ACTIVE: ["PAUSED", "COMPLETED", "FAILED", "CANCELLED"],
   PAUSED: ["ACTIVE", "COMPLETED", "FAILED", "CANCELLED"],
   COMPLETED: [],
@@ -31,7 +35,7 @@ export function assertSessionStatusTransition(
   to: SessionOperationalStatus,
 ): void {
   if (!canTransitionSessionStatus(from, to)) {
-    throw new Error(`Invalid session status transition: ${from} → ${to}`);
+    throw new InvalidStateTransitionError("session", from, to);
   }
 }
 
@@ -40,5 +44,17 @@ export function isSessionTerminal(status: SessionOperationalStatus): boolean {
 }
 
 export function isSessionActive(status: SessionOperationalStatus): boolean {
-  return status === "ACTIVE" || status === "PAUSED" || status === "PENDING";
+  return (
+    status === "ACTIVE" ||
+    status === "PAUSED" ||
+    status === "PENDING" ||
+    status === "PREPARING"
+  );
 }
+
+export const ACTIVE_SESSION_STATUSES = [
+  "PENDING",
+  "PREPARING",
+  "ACTIVE",
+  "PAUSED",
+] as const satisfies readonly SessionOperationalStatus[];

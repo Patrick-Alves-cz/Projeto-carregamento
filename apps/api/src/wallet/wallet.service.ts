@@ -2,15 +2,15 @@ import { Injectable, Logger } from "@nestjs/common";
 import {
   calculateCostCents,
   InsufficientBalanceError,
-  NotFoundError,
   ValidationError,
 } from "@evcharge/domain";
 import { Prisma, WalletTransactionType } from "@prisma/client";
 import { PrismaService } from "../common/database/database.module";
+import { AuditLogger } from "../common/logging/audit-logger";
 
 @Injectable()
 export class WalletService {
-  private readonly logger = new Logger(WalletService.name);
+  private readonly audit = new AuditLogger(new Logger(WalletService.name));
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -26,6 +26,11 @@ export class WalletService {
   async assertMinimumBalance(userId: string, minBalanceCents: number): Promise<void> {
     const wallet = await this.getOrCreateWallet(userId);
     if (wallet.balanceCents < minBalanceCents) {
+      this.audit.warn("wallet.insufficient", {
+        userId,
+        minBalanceCents,
+        balanceCents: wallet.balanceCents,
+      });
       throw new InsufficientBalanceError(
         `Saldo insuficiente. Mínimo: R$ ${(minBalanceCents / 100).toFixed(2)}`,
       );
@@ -36,7 +41,7 @@ export class WalletService {
     tx: Prisma.TransactionClient,
     params: {
       userId: string;
-      sessionId: string;
+      sessionId?: string | null;
       amountCents: number;
       description: string;
       idempotencyKey: string;
@@ -47,6 +52,10 @@ export class WalletService {
       return wallet?.balanceCents ?? 0;
     }
 
+    await tx.$queryRaw`
+      SELECT id FROM wallets WHERE user_id = ${params.userId} FOR UPDATE
+    `;
+
     const existing = await tx.walletTransaction.findUnique({
       where: { idempotencyKey: params.idempotencyKey },
     });
@@ -54,23 +63,31 @@ export class WalletService {
       return existing.balanceAfterCents;
     }
 
-    const wallet = await tx.wallet.findUnique({ where: { userId: params.userId } });
-    if (!wallet) throw new NotFoundError("Wallet", params.userId);
+    const updated = await tx.$queryRaw<Array<{ id: string; balance_cents: number }>>`
+      UPDATE wallets
+      SET balance_cents = balance_cents - ${params.amountCents},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ${params.userId}
+        AND balance_cents >= ${params.amountCents}
+      RETURNING id, balance_cents
+    `;
 
-    const balanceAfter = wallet.balanceCents - params.amountCents;
-    if (balanceAfter < 0) {
+    if (updated.length === 0) {
+      this.audit.warn("wallet.insufficient", {
+        userId: params.userId,
+        sessionId: params.sessionId,
+        amountCents: params.amountCents,
+      });
       throw new InsufficientBalanceError("Saldo insuficiente para continuar a recarga");
     }
 
-    await tx.wallet.update({
-      where: { id: wallet.id },
-      data: { balanceCents: balanceAfter },
-    });
+    const walletId = updated[0]!.id;
+    const balanceAfter = updated[0]!.balance_cents;
 
     await tx.walletTransaction.create({
       data: {
-        walletId: wallet.id,
-        sessionId: params.sessionId,
+        walletId,
+        sessionId: params.sessionId ?? undefined,
         type: WalletTransactionType.DEBIT,
         amountCents: -params.amountCents,
         balanceAfterCents: balanceAfter,
@@ -79,8 +96,7 @@ export class WalletService {
       },
     });
 
-    this.logger.log({
-      action: "wallet.debit",
+    this.audit.info("wallet.debit", {
       userId: params.userId,
       sessionId: params.sessionId,
       amountCents: params.amountCents,
@@ -99,13 +115,17 @@ export class WalletService {
     if (amountCents <= 0) throw new ValidationError("Credit amount must be positive");
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM wallets WHERE user_id = ${userId} FOR UPDATE`;
       const wallet = await this.getOrCreateWallet(userId);
-      const balanceAfter = wallet.balanceCents + amountCents;
 
-      await tx.wallet.update({
-        where: { id: wallet.id },
-        data: { balanceCents: balanceAfter },
-      });
+      const rows = await tx.$queryRaw<Array<{ balance_cents: number }>>`
+        UPDATE wallets
+        SET balance_cents = balance_cents + ${amountCents},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${wallet.id}
+        RETURNING balance_cents
+      `;
+      const balanceAfter = rows[0]?.balance_cents ?? wallet.balanceCents + amountCents;
 
       await tx.walletTransaction.create({
         data: {

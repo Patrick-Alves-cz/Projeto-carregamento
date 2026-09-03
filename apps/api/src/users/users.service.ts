@@ -30,8 +30,8 @@ export class UsersService {
           update: {
             fullName: input.fullName,
             phone: input.phone,
-            document: input.document,
             avatarUrl: input.avatarUrl,
+            ...(user.role !== "DRIVER" ? { document: input.document } : {}),
           },
         },
       },
@@ -64,7 +64,13 @@ export class UsersService {
       role: user.role,
       status: user.status,
       createdAt: user.createdAt,
-      profile: user.profile,
+      profile: user.profile
+        ? {
+            fullName: user.profile.fullName,
+            phone: user.profile.phone,
+            avatarUrl: user.profile.avatarUrl,
+          }
+        : null,
       companies: user.companyMembers.map((m) => ({
         memberRole: m.role,
         ...m.company,

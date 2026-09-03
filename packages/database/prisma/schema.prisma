@@ -59,6 +59,14 @@ enum ConnectorType {
   CHADEMO
   J1772
   NACS
+  GB_T
+  OTHER
+}
+
+enum StationAccessType {
+  PUBLIC
+  PRIVATE
+  RESTRICTED
 }
 
 enum ConnectorStatus {
@@ -73,6 +81,7 @@ enum ConnectorStatus {
 
 enum SessionStatus {
   PENDING
+  PREPARING
   ACTIVE
   PAUSED
   COMPLETED
@@ -126,16 +135,19 @@ model User {
 }
 
 model RefreshToken {
-  id        String    @id @default(cuid())
-  userId    String    @map("user_id")
-  tokenHash String    @unique @map("token_hash")
-  expiresAt DateTime  @map("expires_at")
-  revokedAt DateTime? @map("revoked_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  familyId     String    @map("family_id")
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  replacedById String?   @map("replaced_by_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([familyId])
   @@map("refresh_tokens")
 }
 
@@ -191,15 +203,16 @@ model CompanyMember {
 // ─── Driver fleet ────────────────────────────────────────────────────────────
 
 model Vehicle {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
+  id             String          @id @default(cuid())
+  userId         String          @map("user_id")
   brand          String
   model          String
   year           Int?
-  batteryKwh     Decimal? @map("battery_kwh") @db.Decimal(10, 2)
+  batteryKwh     Decimal?        @map("battery_kwh") @db.Decimal(10, 2)
   connectorTypes ConnectorType[] @map("connector_types")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  isDefault      Boolean         @default(false) @map("is_default")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
 
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   chargingSessions ChargingSession[]
@@ -210,16 +223,20 @@ model Vehicle {
 // ─── Infrastructure ──────────────────────────────────────────────────────────
 
 model Station {
-  id        String        @id @default(cuid())
-  companyId String        @map("company_id")
-  name      String
-  address   String
-  latitude  Decimal       @db.Decimal(10, 7)
-  longitude Decimal       @db.Decimal(10, 7)
-  status    StationStatus @default(ACTIVE)
-  amenities String[]      @default([])
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @updatedAt @map("updated_at")
+  id           String            @id @default(cuid())
+  companyId    String            @map("company_id")
+  name         String
+  address      String
+  city         String?
+  postalCode   String?           @map("postal_code")
+  latitude     Decimal           @db.Decimal(10, 7)
+  longitude    Decimal           @db.Decimal(10, 7)
+  status       StationStatus     @default(ACTIVE)
+  accessType   StationAccessType @default(PUBLIC) @map("access_type")
+  amenities    String[]          @default([])
+  openingHours Json              @default("{}") @map("opening_hours")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   chargers Charger[]
@@ -303,10 +320,11 @@ model ChargingSession {
   currentPowerKw  Decimal?           @map("current_power_kw") @db.Decimal(10, 2)
   currentVoltage  Decimal?           @map("current_voltage") @db.Decimal(10, 2)
   currentAmperage Decimal?           @map("current_amperage") @db.Decimal(10, 2)
-  costCents       Int                @default(0) @map("cost_cents")
-  idempotencyKey  String?            @unique @map("idempotency_key")
-  createdAt       DateTime           @default(now()) @map("created_at")
-  updatedAt       DateTime           @updatedAt @map("updated_at")
+  costCents          Int                @default(0) @map("cost_cents")
+  idempotencyKey     String?            @map("idempotency_key")
+  stopIdempotencyKey String?            @map("stop_idempotency_key")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
 
   user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -316,6 +334,8 @@ model ChargingSession {
   payment            Payment?
   walletTransactions WalletTransaction[]
 
+  @@unique([userId, idempotencyKey])
+  @@unique([userId, stopIdempotencyKey])
   @@index([userId, status])
   @@index([connectorId, status])
   @@index([status, startedAt])
@@ -399,4 +419,28 @@ model ChargingEvent {
 
   @@index([entityType, entityId, createdAt])
   @@map("charging_events")
+}
+
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  type      String
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+  @@map("security_events")
+}
+
+model IdempotencyRecord {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  operation  String
+  key        String
+  resourceId String?  @map("resource_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, operation, key])
+  @@map("idempotency_records")
 }

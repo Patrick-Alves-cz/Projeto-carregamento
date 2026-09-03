@@ -1,10 +1,11 @@
 import { Body, Controller, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
-import { ForbiddenError, NotFoundError } from "@evcharge/domain";
+import { ForbiddenError, NotFoundError, assertChargerStatusTransition } from "@evcharge/domain";
 import { z } from "zod";
-import { ChargerStatus, ConnectorStatus } from "@prisma/client";
+import { ChargerStatus, ConnectorStatus, UserRole } from "@prisma/client";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { Roles } from "../common/decorators/auth.decorators";
 import { AuthenticatedUser } from "../common/types/auth.types";
 import { TenantAccessService } from "../common/services/tenant-access.service";
 import { PrismaService } from "../common/database/database.module";
@@ -27,6 +28,7 @@ export class ChargersAdminController {
   ) {}
 
   @Post(":id/demo-action")
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Demo administrative action on a charger" })
   async demoAction(
     @Param("id") chargerId: string,
@@ -80,6 +82,8 @@ export class ChargersAdminController {
         throw new ForbiddenError("Invalid action");
     }
 
+    assertChargerStatusTransition(charger.status, newStatus);
+
     await this.prisma.charger.update({
       where: { id: chargerId },
       data: { status: newStatus, lastSeenAt: new Date() },
@@ -97,7 +101,13 @@ export class ChargersAdminController {
       entityType: "charger",
       entityId: chargerId,
       timestamp: new Date(),
-      payload: { chargerId, status: newStatus, action },
+      payload: {
+        chargerId,
+        stationId: charger.stationId,
+        companyId: charger.station.companyId,
+        status: newStatus,
+        action,
+      },
     });
 
     return { chargerId, action, status: newStatus };
