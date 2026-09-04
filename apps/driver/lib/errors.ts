@@ -10,9 +10,7 @@ export function driverErrorMessage(error: unknown): string {
       return "Este conector está ocupado ou indisponível.";
     }
     if (error.code === "INSUFFICIENT_BALANCE") {
-      return error.message.startsWith("Saldo")
-        ? error.message
-        : "Saldo insuficiente para iniciar a recarga.";
+      return "Adicione saldo para iniciar a recarga.";
     }
     if (error.code === "SESSION_STATE_ERROR") {
       return "Você já possui uma recarga em andamento.";

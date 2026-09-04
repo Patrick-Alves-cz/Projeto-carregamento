@@ -113,6 +113,29 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum WalletTxKind {
+  DEPOSIT
+  CHARGE
+  REFUND
+  ADJUSTMENT
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum NotificationType {
+  LOW_BALANCE
+  SESSION_STARTED
+  SESSION_PAUSED
+  SESSION_RESUMED
+  SESSION_COMPLETED
+  SESSION_INSUFFICIENT_BALANCE
+}
+
 // ─── Users & Profiles ──────────────────────────────────────────────────────────
 
 model User {
@@ -128,8 +151,14 @@ model User {
   companyMembers   CompanyMember[]
   vehicles         Vehicle[]
   refreshTokens    RefreshToken[]
-  wallet           Wallet?
-  chargingSessions ChargingSession[]
+  wallet              Wallet?
+  chargingSessions    ChargingSession[]
+  passwordResetTokens PasswordResetToken[]
+  invitationsSent     Invitation[]         @relation("InvitationInviter")
+  invitationsAccepted Invitation[]         @relation("InvitationAccepter")
+  notifications       InAppNotification[]
+  receipts            Receipt[]
+  payments            Payment[]
 
   @@map("users")
 }
@@ -178,9 +207,10 @@ model Company {
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
-  members  CompanyMember[]
-  stations Station[]
-  tariffs  Tariff[]
+  members     CompanyMember[]
+  stations    Station[]
+  tariffs     Tariff[]
+  invitations Invitation[]
 
   @@map("companies")
 }
@@ -235,10 +265,12 @@ model Station {
   accessType   StationAccessType @default(PUBLIC) @map("access_type")
   amenities    String[]          @default([])
   openingHours Json              @default("{}") @map("opening_hours")
+  tariffId     String?           @map("tariff_id")
   createdAt    DateTime          @default(now()) @map("created_at")
   updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tariff   Tariff?   @relation(fields: [tariffId], references: [id], onDelete: SetNull)
   chargers Charger[]
 
   @@index([companyId, status])
@@ -271,10 +303,12 @@ model Connector {
   type       ConnectorType
   maxPowerKw Decimal         @map("max_power_kw") @db.Decimal(10, 2)
   status     ConnectorStatus @default(UNAVAILABLE)
+  tariffId   String?         @map("tariff_id")
   createdAt  DateTime        @default(now()) @map("created_at")
   updatedAt  DateTime        @updatedAt @map("updated_at")
 
   charger          Charger           @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  tariff           Tariff?           @relation(fields: [tariffId], references: [id], onDelete: SetNull)
   chargingSessions ChargingSession[]
 
   @@unique([chargerId, number])
@@ -285,18 +319,25 @@ model Connector {
 // ─── Tariffs ─────────────────────────────────────────────────────────────────
 
 model Tariff {
-  id               String   @id @default(cuid())
-  companyId        String   @map("company_id")
-  name             String
-  pricePerKwhCents Int      @map("price_per_kwh_cents")
-  minBalanceCents  Int      @default(500) @map("min_balance_cents")
-  currency         String   @default("BRL")
-  active           Boolean  @default(true)
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  id                  String    @id @default(cuid())
+  companyId           String    @map("company_id")
+  name                String
+  pricePerKwhCents    Int       @map("price_per_kwh_cents")
+  pricePerMinuteCents Int       @default(0) @map("price_per_minute_cents")
+  idleFeeCents        Int       @default(0) @map("idle_fee_cents")
+  connectionFeeCents  Int       @default(0) @map("connection_fee_cents")
+  minBalanceCents     Int       @default(1000) @map("min_balance_cents")
+  currency            String    @default("BRL")
+  validFrom           DateTime? @map("valid_from")
+  validTo             DateTime? @map("valid_to")
+  active              Boolean   @default(true)
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  sessions ChargingSession[]
+  company    Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions   ChargingSession[]
+  stations   Station[]
+  connectors Connector[]
 
   @@index([companyId, active])
   @@map("tariffs")
@@ -332,6 +373,7 @@ model ChargingSession {
   tariff             Tariff              @relation(fields: [tariffId], references: [id], onDelete: Restrict)
   meterValues        MeterValue[]
   payment            Payment?
+  receipt            Receipt?
   walletTransactions WalletTransaction[]
 
   @@unique([userId, idempotencyKey])
@@ -379,6 +421,7 @@ model WalletTransaction {
   walletId          String                @map("wallet_id")
   sessionId         String?               @map("session_id")
   type              WalletTransactionType
+  kind              WalletTxKind          @default(ADJUSTMENT)
   amountCents       Int                   @map("amount_cents")
   balanceAfterCents Int                   @map("balance_after_cents")
   description       String
@@ -393,18 +436,91 @@ model WalletTransaction {
 }
 
 model Payment {
-  id          String        @id @default(cuid())
-  sessionId   String        @unique @map("session_id")
-  amountCents Int           @map("amount_cents")
-  currency    String        @default("BRL")
-  status      PaymentStatus @default(PENDING)
-  method      String        @default("WALLET_DEMO")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id             String        @id @default(cuid())
+  userId         String        @map("user_id")
+  sessionId      String?       @unique @map("session_id")
+  amountCents    Int           @map("amount_cents")
+  currency       String        @default("BRL")
+  status         PaymentStatus @default(PENDING)
+  method         String        @default("WALLET_DEMO")
+  idempotencyKey String?       @unique @map("idempotency_key")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@map("payments")
+}
+
+model Receipt {
+  id        String   @id @default(cuid())
+  number    String   @unique
+  sessionId String   @unique @map("session_id")
+  userId    String   @map("user_id")
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at")
 
   session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("payments")
+  @@index([userId, createdAt])
+  @@map("receipts")
+}
+
+model Invitation {
+  id           String           @id @default(cuid())
+  email        String
+  companyId    String           @map("company_id")
+  role         UserRole
+  tokenHash    String           @unique @map("token_hash")
+  expiresAt    DateTime         @map("expires_at")
+  invitedById  String           @map("invited_by_id")
+  status       InvitationStatus @default(PENDING)
+  acceptedAt   DateTime?        @map("accepted_at")
+  acceptedById String?          @map("accepted_by_id")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invitedBy  User    @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedBy User?   @relation("InvitationAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([email, status])
+  @@map("invitations")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
+}
+
+model InAppNotification {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  body      String
+  payload   Json             @default("{}")
+  dedupeKey String?          @unique @map("dedupe_key")
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("in_app_notifications")
 }
 
 // ─── Audit Events ────────────────────────────────────────────────────────────

@@ -21,6 +21,12 @@ export default function RootLayout() {
         setReady(true);
         return;
       }
+      const first = String(segments[0] ?? "");
+      const publicAuth =
+        first === "login" ||
+        first === "register" ||
+        first === "forgot-password" ||
+        first === "reset-password";
       if (tokens) {
         try {
           const me = await getMe();
@@ -37,7 +43,7 @@ export default function RootLayout() {
             setReady(true);
             return;
           }
-          if (!needsOnboarding && (segments[0] === "login" || segments[0] === "register" || inOnboarding)) {
+          if (!needsOnboarding && (publicAuth || inOnboarding)) {
             router.replace("/(app)/(tabs)");
           }
         } catch {
@@ -65,6 +71,8 @@ export default function RootLayout() {
       >
         <Stack.Screen name="login" />
         <Stack.Screen name="register" />
+        <Stack.Screen name="forgot-password" />
+        <Stack.Screen name="reset-password" />
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="(app)" />
       </Stack>

@@ -4,11 +4,14 @@ import { useRouter } from "expo-router";
 import { ScreenState } from "../../../components/screen-state";
 import {
   getMe,
+  listNotifications,
   listVehicles,
   logout,
+  markNotificationRead,
   updateMe,
   updateVehicle,
   type AuthUser,
+  type InAppNotification,
   type Vehicle,
 } from "../../../lib/api-client";
 import { driverErrorMessage } from "../../../lib/errors";
@@ -19,6 +22,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
@@ -26,12 +30,13 @@ export default function ProfileScreen() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    Promise.all([getMe(), listVehicles()])
-      .then(([me, list]) => {
+    Promise.all([getMe(), listVehicles(), listNotifications().catch(() => [])])
+      .then(([me, list, inbox]) => {
         setUser(me);
         setFullName(me.profile?.fullName ?? "");
         setPhone(me.profile?.phone ?? "");
         setVehicles(list);
+        setNotifications(inbox);
       })
       .catch((err: unknown) => setError(driverErrorMessage(err)))
       .finally(() => setLoading(false));
@@ -98,6 +103,32 @@ export default function ProfileScreen() {
         <Pressable onPress={() => router.push("/(app)/(tabs)/vehicles")}>
           <Text style={styles.link}>Gerenciar veículos</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.kicker}>Avisos</Text>
+        {notifications.length === 0 ? (
+          <Text style={styles.meta}>Nenhum aviso interno.</Text>
+        ) : (
+          notifications.slice(0, 8).map((item) => (
+            <Pressable
+              key={item.id}
+              onPress={() =>
+                void markNotificationRead(item.id).then(() =>
+                  listNotifications().then(setNotifications),
+                )
+              }
+              style={styles.vehicle}
+            >
+              <Text style={styles.vehicleName}>{item.title}</Text>
+              <Text style={styles.meta}>{item.body}</Text>
+              <Text style={styles.meta}>
+                {new Date(item.createdAt).toLocaleString("pt-BR")}
+                {item.readAt ? "" : " · novo"}
+              </Text>
+            </Pressable>
+          ))
+        )}
       </View>
 
       <Pressable onPress={() => void handleLogout()} style={styles.logout}>

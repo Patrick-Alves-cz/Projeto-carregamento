@@ -100,6 +100,16 @@ export class SessionsController {
     return this.sessionsService.findAll(query as Parameters<SessionsService["findAll"]>[0], user);
   }
 
+  @Get(":id/receipt")
+  @ApiOperation({ summary: "Get the logical receipt for a finished session" })
+  receipt(
+    @Param(new ZodValidationPipe(sessionIdParamSchema)) params: unknown,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const { id } = params as { id: string };
+    return this.sessionsService.getReceipt(id, user);
+  }
+
   @Get(":id")
   @ApiOperation({ summary: "Get charging session detail" })
   findOne(

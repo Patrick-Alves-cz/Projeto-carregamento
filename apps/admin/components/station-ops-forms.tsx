@@ -5,9 +5,11 @@ import { CONNECTOR_TYPES, CONNECTOR_TYPE_LABELS } from "@evcharge/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useQuery } from "@/hooks/use-query";
 import {
   createCharger,
   createConnector,
+  listTariffs,
   updateCharger,
   updateConnector,
   updateStation,
@@ -16,6 +18,8 @@ import {
 
 export function StationOpsForms({ station, onSaved }: { station: Station; onSaved: () => void }) {
   const [error, setError] = useState("");
+  const tariffsQuery = useQuery(listTariffs, []);
+  const tariffs = (tariffsQuery.data ?? []).filter((item) => item.active);
   const [stationForm, setStationForm] = useState({
     name: station.name,
     address: station.address,
@@ -27,6 +31,7 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
     accessType: station.accessType ?? "PUBLIC",
     amenities: station.amenities.join(","),
     openingHours: station.openingHoursLabel ?? "",
+    tariffId: station.tariffId ?? "",
   });
   const [chargerForm, setChargerForm] = useState({
     serialNumber: "",
@@ -38,6 +43,7 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
     number: "1",
     type: "CCS2",
     maxPowerKw: "50",
+    tariffId: "",
   });
 
   async function saveStation(event: React.FormEvent) {
@@ -55,6 +61,7 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
         accessType: stationForm.accessType as "PUBLIC" | "PRIVATE" | "RESTRICTED",
         amenities: stationForm.amenities.split(",").map((item) => item.trim()).filter(Boolean),
         openingHours: { label: stationForm.openingHours },
+        tariffId: stationForm.tariffId || null,
       });
       onSaved();
     } catch (err: unknown) {
@@ -88,6 +95,7 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
         number: Number(connectorForm.number),
         type: connectorForm.type,
         maxPowerKw: Number(connectorForm.maxPowerKw),
+        tariffId: connectorForm.tariffId || null,
       });
       onSaved();
     } catch (err: unknown) {
@@ -127,6 +135,21 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
             <option value="PUBLIC">Público</option>
             <option value="PRIVATE">Privado</option>
             <option value="RESTRICTED">Restrito</option>
+          </select>
+        </div>
+        <div className="space-y-2 sm:col-span-2">
+          <Label>Tarifa da estação</Label>
+          <select
+            className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+            value={stationForm.tariffId}
+            onChange={(event) => setStationForm((c) => ({ ...c, tariffId: event.target.value }))}
+          >
+            <option value="">Herdar da empresa</option>
+            {tariffs.map((tariff) => (
+              <option key={tariff.id} value={tariff.id}>
+                {tariff.name}
+              </option>
+            ))}
           </select>
         </div>
         <div className="sm:col-span-2">
@@ -219,6 +242,21 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
           value={connectorForm.maxPowerKw}
           onChange={(maxPowerKw) => setConnectorForm((c) => ({ ...c, maxPowerKw }))}
         />
+        <div className="space-y-2 sm:col-span-2">
+          <Label>Tarifa do conector</Label>
+          <select
+            className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+            value={connectorForm.tariffId}
+            onChange={(event) => setConnectorForm((c) => ({ ...c, tariffId: event.target.value }))}
+          >
+            <option value="">Herdar da estação</option>
+            {tariffs.map((tariff) => (
+              <option key={tariff.id} value={tariff.id}>
+                {tariff.name}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="sm:col-span-4">
           <Button type="submit" variant="outline">
             Adicionar conector
@@ -238,6 +276,7 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
                 await updateConnector(connector.id, {
                   type: String(formData.get("type")),
                   maxPowerKw: Number(formData.get("maxPowerKw")),
+                  tariffId: String(formData.get("tariffId") || "") || null,
                 });
                 onSaved();
               } catch (err: unknown) {
@@ -259,6 +298,21 @@ export function StationOpsForms({ station, onSaved }: { station: Station; onSave
               </select>
             </div>
             <Field name="maxPowerKw" label="kW" defaultValue={String(connector.maxPowerKw)} />
+            <div className="space-y-2">
+              <Label>Tarifa</Label>
+              <select
+                name="tariffId"
+                defaultValue={connector.assignedTariffId ?? ""}
+                className="h-9 rounded-md border bg-transparent px-3 text-sm"
+              >
+                <option value="">Herdar da estação</option>
+                {tariffs.map((tariff) => (
+                  <option key={tariff.id} value={tariff.id}>
+                    {tariff.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <Button type="submit" size="sm" variant="outline">
               Salvar
             </Button>

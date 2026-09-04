@@ -7,8 +7,8 @@ import { KpiSkeleton, QueryError, TableSkeleton } from "@/components/query-state
 import { StationsTable } from "@/components/stations-table";
 import { useQuery } from "@/hooks/use-query";
 import { useAuth } from "@/components/app-shell";
-import { listStations, listActiveSessions, listSessions } from "@/lib/api-client";
-import { formatCurrency, isChargerOnline } from "@/lib/labels";
+import { getOpsSummary, listStations } from "@/lib/api-client";
+import { formatCurrency } from "@/lib/labels";
 
 function Kpi({
   label,
@@ -41,18 +41,9 @@ function Kpi({
 
 export default function DashboardPage() {
   const user = useAuth();
+  const summaryQuery = useQuery(getOpsSummary, []);
   const stationsQuery = useQuery(listStations, []);
-  const activeSessionsQuery = useQuery(listActiveSessions, []);
-  const completedSessionsQuery = useQuery(() => listSessions({ status: "COMPLETED", limit: 100 }), []);
-
-  const stations = stationsQuery.data ?? [];
-  const activeSessions = activeSessionsQuery.data ?? [];
-  const completedSessions = completedSessionsQuery.data?.items ?? [];
-  const chargers = stations.flatMap((s) => s.chargers);
-  const online = chargers.filter((c) => isChargerOnline(c.status)).length;
-  const occupied = chargers.filter((c) => c.status === "CHARGING").length;
-  const totalEnergy = completedSessions.reduce((acc, s) => acc + (s.energyKwh ?? 0), 0);
-  const totalRevenue = completedSessions.reduce((acc, s) => acc + (s.costCents ?? 0), 0);
+  const summary = summaryQuery.data;
   const company = user.companies[0]?.name;
   const name = user.profile?.fullName?.split(" ")[0];
 
@@ -63,22 +54,27 @@ export default function DashboardPage() {
           {name ? `Olá, ${name}` : "Visão geral"}
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {company ? `Rede ${company} · operação em tempo real da infraestrutura.` : "Acompanhe estações e conectores da sua empresa."}
+          {company ? `Rede ${company} · totais da API operacional.` : "Acompanhe estações e conectores da sua empresa."}
         </p>
       </div>
 
-      {stationsQuery.loading ? (
+      {summaryQuery.loading ? (
         <KpiSkeleton />
-      ) : stationsQuery.error ? (
-        <QueryError message={stationsQuery.error} />
-      ) : (
+      ) : summaryQuery.error ? (
+        <QueryError message={summaryQuery.error} />
+      ) : summary ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Kpi label="Estações" value={stations.length} hint="No recorte da sua empresa" icon={MapPin} />
-          <Kpi label="Carregadores online" value={`${online}/${chargers.length}`} hint="Disponíveis para operação" icon={PlugZap} />
-          <Kpi label="Sessões ativas" value={activeSessions.length} hint={`${occupied} carregadores ocupados`} icon={Cable} />
-          <Kpi label="Receita demo" value={formatCurrency(totalRevenue)} hint={`${totalEnergy.toFixed(1)} kWh consumidos`} icon={Wrench} />
+          <Kpi label="Sessões ativas" value={summary.activeSessions} hint={`${summary.occupiedChargers} ocupados`} icon={Cable} />
+          <Kpi label="Disponíveis" value={summary.availableChargers} hint={`${summary.chargers} carregadores`} icon={PlugZap} />
+          <Kpi label="Offline / falha" value={summary.offlineChargers} hint="Inclui manutenção" icon={MapPin} />
+          <Kpi
+            label="Receita DEMO"
+            value={formatCurrency(summary.demoRevenueCents)}
+            hint={`${summary.energyKwh.toFixed(1)} kWh · ${summary.activeCustomers} clientes`}
+            icon={Wrench}
+          />
         </div>
-      )}
+      ) : null}
 
       <Card className="gap-4 py-5">
         <CardHeader className="flex flex-row items-center justify-between px-5">
@@ -94,7 +90,7 @@ export default function DashboardPage() {
           {stationsQuery.loading ? (
             <TableSkeleton />
           ) : stationsQuery.error ? null : (
-            <StationsTable stations={stations} />
+            <StationsTable stations={stationsQuery.data ?? []} />
           )}
         </CardContent>
       </Card>

@@ -1,12 +1,21 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   calculateCostCents,
+  ForbiddenError,
   InsufficientBalanceError,
   ValidationError,
 } from "@evcharge/domain";
-import { Prisma, WalletTransactionType } from "@prisma/client";
+import type { ListWalletTransactionsQuery } from "@evcharge/shared";
+import {
+  PaymentStatus,
+  Prisma,
+  UserRole,
+  WalletTransactionType,
+  WalletTxKind,
+} from "@prisma/client";
 import { PrismaService } from "../common/database/database.module";
 import { AuditLogger } from "../common/logging/audit-logger";
+import { AuthenticatedUser } from "../common/types/auth.types";
 
 @Injectable()
 export class WalletService {
@@ -23,6 +32,34 @@ export class WalletService {
     });
   }
 
+  async getMine(user: AuthenticatedUser) {
+    this.assertDriver(user);
+    const wallet = await this.getOrCreateWallet(user.id);
+    return {
+      id: wallet.id,
+      userId: wallet.userId,
+      balanceCents: wallet.balanceCents,
+      currency: wallet.currency,
+      updatedAt: wallet.updatedAt,
+    };
+  }
+
+  async listTransactions(user: AuthenticatedUser, query: ListWalletTransactionsQuery) {
+    this.assertDriver(user);
+    const wallet = await this.getOrCreateWallet(user.id);
+    const skip = (query.page - 1) * query.limit;
+    const [items, total] = await Promise.all([
+      this.prisma.walletTransaction.findMany({
+        where: { walletId: wallet.id },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: query.limit,
+      }),
+      this.prisma.walletTransaction.count({ where: { walletId: wallet.id } }),
+    ]);
+    return { items, total, page: query.page, limit: query.limit, balanceCents: wallet.balanceCents };
+  }
+
   async assertMinimumBalance(userId: string, minBalanceCents: number): Promise<void> {
     const wallet = await this.getOrCreateWallet(userId);
     if (wallet.balanceCents < minBalanceCents) {
@@ -31,9 +68,7 @@ export class WalletService {
         minBalanceCents,
         balanceCents: wallet.balanceCents,
       });
-      throw new InsufficientBalanceError(
-        `Saldo insuficiente. Mínimo: R$ ${(minBalanceCents / 100).toFixed(2)}`,
-      );
+      throw new InsufficientBalanceError("Adicione saldo para iniciar a recarga.");
     }
   }
 
@@ -89,6 +124,7 @@ export class WalletService {
         walletId,
         sessionId: params.sessionId ?? undefined,
         type: WalletTransactionType.DEBIT,
+        kind: WalletTxKind.CHARGE,
         amountCents: -params.amountCents,
         balanceAfterCents: balanceAfter,
         description: params.description,
@@ -104,6 +140,80 @@ export class WalletService {
     });
 
     return balanceAfter;
+  }
+
+  async topUpDemo(
+    user: AuthenticatedUser,
+    input: { amountCents: number; idempotencyKey?: string },
+  ) {
+    this.assertDriver(user);
+    if (input.amountCents <= 0) throw new ValidationError("Valor inválido");
+
+    const idempotencyKey = input.idempotencyKey ?? `topup-${user.id}-${Date.now()}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      if (input.idempotencyKey) {
+        const existingPayment = await tx.payment.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existingPayment) {
+          const wallet = await this.getOrCreateWallet(user.id);
+          return {
+            wallet: { id: wallet.id, balanceCents: wallet.balanceCents, currency: wallet.currency },
+            payment: existingPayment,
+            replayed: true,
+          };
+        }
+      }
+
+      await tx.$queryRaw`SELECT id FROM wallets WHERE user_id = ${user.id} FOR UPDATE`;
+      const wallet = await this.getOrCreateWallet(user.id);
+
+      const payment = await tx.payment.create({
+        data: {
+          userId: user.id,
+          amountCents: input.amountCents,
+          currency: "BRL",
+          status: PaymentStatus.COMPLETED,
+          method: "WALLET_DEMO",
+          idempotencyKey,
+        },
+      });
+
+      const rows = await tx.$queryRaw<Array<{ balance_cents: number }>>`
+        UPDATE wallets
+        SET balance_cents = balance_cents + ${input.amountCents},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${wallet.id}
+        RETURNING balance_cents
+      `;
+      const balanceAfter = rows[0]?.balance_cents ?? wallet.balanceCents + input.amountCents;
+
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: WalletTransactionType.CREDIT,
+          kind: WalletTxKind.DEPOSIT,
+          amountCents: input.amountCents,
+          balanceAfterCents: balanceAfter,
+          description: `Depósito DEMO de R$ ${(input.amountCents / 100).toFixed(2)}`,
+          idempotencyKey: `wallet-${idempotencyKey}`,
+        },
+      });
+
+      this.audit.info("wallet.topup", {
+        userId: user.id,
+        amountCents: input.amountCents,
+        paymentId: payment.id,
+        balanceAfterCents: balanceAfter,
+      });
+
+      return {
+        wallet: { id: wallet.id, balanceCents: balanceAfter, currency: wallet.currency },
+        payment,
+        replayed: false,
+      };
+    });
   }
 
   async creditDemo(
@@ -131,6 +241,7 @@ export class WalletService {
         data: {
           walletId: wallet.id,
           type: WalletTransactionType.CREDIT,
+          kind: WalletTxKind.ADJUSTMENT,
           amountCents,
           balanceAfterCents: balanceAfter,
           description,
@@ -144,5 +255,11 @@ export class WalletService {
 
   calculateSessionCost(energyKwh: number, pricePerKwhCents: number): number {
     return calculateCostCents(energyKwh, pricePerKwhCents);
+  }
+
+  private assertDriver(user: AuthenticatedUser) {
+    if (user.role !== UserRole.DRIVER) {
+      throw new ForbiddenError("Somente motoristas acessam a carteira");
+    }
   }
 }

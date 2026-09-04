@@ -9,6 +9,9 @@ import {
   Map,
   MapPin,
   Menu,
+  Receipt,
+  Users,
+  Wallet,
   Zap,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -40,6 +43,9 @@ const NAV = [
   { href: "/dashboard/map", label: "Mapa da rede", icon: Map },
   { href: "/dashboard/operations", label: "Operação ao vivo", icon: Zap },
   { href: "/dashboard/stations", label: "Estações", icon: MapPin },
+  { href: "/dashboard/tariffs", label: "Tarifas", icon: Wallet },
+  { href: "/dashboard/team", label: "Equipe", icon: Users },
+  { href: "/dashboard/payments", label: "Transações demo", icon: Receipt },
 ];
 
 function isActive(pathname: string, href: string) {

@@ -38,6 +38,9 @@ export interface Connector {
   status: string;
   compatible: boolean | null;
   pricePerKwhCents: number | null;
+  pricePerMinuteCents?: number;
+  idleFeeCents?: number;
+  connectionFeeCents?: number;
   currency: string;
   action: "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE";
 }
@@ -76,6 +79,8 @@ export interface Station {
   maxPowerKw: number;
   pricePerKwhCents: number | null;
   currency: string;
+  connectionFeeCents?: number;
+  idleFeeCents?: number;
   compatible: boolean | null;
   crowded: boolean;
   lastSeenAt: string | null;
@@ -201,9 +206,14 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   const data = await res.json().catch(() => ({}));
-  const isPublicAuth = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/logout"].includes(
-    path.split("?")[0] ?? path,
-  );
+  const isPublicAuth = [
+    "/auth/login",
+    "/auth/register",
+    "/auth/refresh",
+    "/auth/logout",
+    "/auth/forgot-password",
+    "/auth/reset-password",
+  ].includes(path.split("?")[0] ?? path);
 
   if (res.status === 401 && retry && !isPublicAuth) {
     refreshInFlight ??= tryRefresh().finally(() => {
@@ -254,7 +264,21 @@ export async function logout() {
 }
 
 export async function getMe() {
-  return apiFetch<AuthUser>("/auth/me");
+  return apiFetch<AuthUser>("/users/me");
+}
+
+export async function forgotPassword(email: string) {
+  return apiFetch<{ message: string; resetToken?: string }>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(token: string, password: string) {
+  return apiFetch<{ success: boolean }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
 }
 
 export async function updateMe(input: { fullName?: string; phone?: string }) {
@@ -320,11 +344,68 @@ export interface ChargingSession {
   startedAt: string | null;
   endedAt: string | null;
   stopReason: string | null;
+  walletBalanceCents?: number;
+  remainingCents?: number;
+  lowBalance?: boolean;
+  tariffSnapshot?: {
+    name: string;
+    pricePerKwhCents: number;
+    pricePerMinuteCents?: number;
+    idleFeeCents?: number;
+    connectionFeeCents?: number;
+    minBalanceCents?: number;
+    currency: string;
+  } | null;
   station: { id: string; name: string; address: string };
   charger: { id: string; serialNumber: string; maxPowerKw: number };
   connector: { id: string; number: number; type: string; maxPowerKw: number };
   vehicle: { brand: string; model: string };
-  payment?: { amountCents: number; status: string } | null;
+  payment?: { amountCents: number; status: string; method?: string } | null;
+  receipt?: { id: string; number: string; payload: ReceiptPayload } | null;
+  meterValues?: Array<{ timestamp: string; energyKwh: number; powerKw: number }>;
+}
+
+export interface ReceiptPayload {
+  brand: string;
+  station: { name: string; address: string };
+  charger: { serialNumber: string };
+  connector: { number: number; type: string };
+  vehicle: { brand: string; model: string };
+  startedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number;
+  energyKwh: number;
+  tariff: { name: string; pricePerKwhCents: number; connectionFeeCents?: number; idleFeeCents?: number } | null;
+  connectionFeeCents: number;
+  idleFeeCents: number;
+  totalCents: number;
+  paymentMethod: string;
+}
+
+export interface Wallet {
+  id: string;
+  userId: string;
+  balanceCents: number;
+  currency: string;
+}
+
+export interface WalletTransaction {
+  id: string;
+  type: string;
+  kind: "DEPOSIT" | "CHARGE" | "REFUND" | "ADJUSTMENT";
+  amountCents: number;
+  balanceAfterCents: number;
+  description: string;
+  createdAt: string;
+}
+
+export interface InAppNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  readAt: string | null;
+  createdAt: string;
 }
 
 export interface SessionsListResponse {
@@ -350,6 +431,50 @@ export async function stopSession(sessionId: string) {
     method: "POST",
     body: JSON.stringify({ idempotencyKey: `stop-${sessionId}` }),
   });
+}
+
+export async function pauseSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/pause`, { method: "POST" });
+}
+
+export async function resumeSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/resume`, { method: "POST" });
+}
+
+export async function getReceipt(sessionId: string) {
+  return apiFetch<{ id: string; number: string; payload: ReceiptPayload }>(
+    `/sessions/${sessionId}/receipt`,
+  );
+}
+
+export async function getWallet() {
+  return apiFetch<Wallet>("/wallet");
+}
+
+export async function listWalletTransactions() {
+  return apiFetch<{ items: WalletTransaction[]; total: number; balanceCents: number }>(
+    "/wallet/transactions?limit=50",
+  );
+}
+
+export async function topUpWallet(amountCents: number) {
+  const idempotencyKey =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `topup-${Date.now()}`;
+  return apiFetch<{ wallet: Wallet; payment: { id: string }; replayed: boolean }>("/wallet/top-up", {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({ amountCents, idempotencyKey }),
+  });
+}
+
+export async function listNotifications() {
+  return apiFetch<InAppNotification[]>("/notifications");
+}
+
+export async function markNotificationRead(id: string) {
+  return apiFetch<InAppNotification>(`/notifications/${id}/read`, { method: "PATCH" });
 }
 
 export async function getSession(sessionId: string) {

@@ -25,17 +25,24 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="vehicles"
-        options={{
-          title: "Veículos",
-          tabBarIcon: ({ color, size }) => <Ionicons name="car" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
         name="history"
         options={{
           title: "Sessões",
           tabBarIcon: ({ color, size }) => <Ionicons name="flash" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="wallet"
+        options={{
+          title: "Carteira",
+          tabBarIcon: ({ color, size }) => <Ionicons name="wallet" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="vehicles"
+        options={{
+          title: "Veículos",
+          tabBarIcon: ({ color, size }) => <Ionicons name="car" color={color} size={size} />,
         }}
       />
       <Tabs.Screen

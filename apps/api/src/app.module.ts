@@ -14,9 +14,13 @@ import { DomainExceptionFilter } from "./common/filters/domain-exception.filter"
 import { JwtAuthGuard } from "./common/guards/jwt-auth.guard";
 import { RolesGuard } from "./common/guards/roles.guard";
 import { HealthModule } from "./health/health.module";
+import { InvitationsModule } from "./invitations/invitations.module";
+import { NotificationsModule } from "./notifications/notifications.module";
+import { OpsModule } from "./ops/ops.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { SessionsModule } from "./sessions/sessions.module";
 import { StationsModule } from "./stations/stations.module";
+import { TariffsModule } from "./tariffs/tariffs.module";
 import { UsersModule } from "./users/users.module";
 import { VehiclesModule } from "./vehicles/vehicles.module";
 import { WalletModule } from "./wallet/wallet.module";
@@ -27,6 +31,10 @@ import { WalletModule } from "./wallet/wallet.module";
     DatabaseModule,
     CommonModule,
     ChargingModule,
+    InvitationsModule,
+    NotificationsModule,
+    OpsModule,
+    TariffsModule,
     WalletModule,
     AuthModule,
     UsersModule,

@@ -47,10 +47,14 @@ async function bootstrap() {
         "Session start/stop accept Idempotency-Key (header or body).",
         "Session states: PENDING → PREPARING → ACTIVE ↔ PAUSED → COMPLETED|FAILED|CANCELLED.",
         "Connector states: AVAILABLE → PREPARING → CHARGING ↔ SUSPENDED → AVAILABLE.",
-        "WebSocket events are scoped to user:{id}, company:{id} and superadmin rooms.",
+        "Wallet endpoints: GET /wallet, GET /wallet/transactions, POST /wallet/top-up (DEMO).",
+        "Tariffs: CRUD /tariffs. Session start snapshots the effective tariff.",
+        "Invitations: POST /invitations (ADMIN+), POST /invitations/:token/accept, POST /invitations/:id/revoke.",
+        "Password recovery: POST /auth/forgot-password, POST /auth/reset-password.",
+        "Receipts: GET /sessions/:id/receipt after completion.",
       ].join("\n"),
     )
-    .setVersion("1.1.0")
+    .setVersion("1.3.0")
     .addBearerAuth()
     .addCookieAuth("evcharge_access")
     .build();

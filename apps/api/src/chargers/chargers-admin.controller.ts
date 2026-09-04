@@ -13,7 +13,7 @@ import { ChargerProviderService } from "../charging/charger-provider.service";
 import { ChargingEventsService } from "../charging/charging-events.service";
 
 const chargerActionSchema = z.object({
-  action: z.enum(["offline", "maintenance", "fault", "restore"]),
+  action: z.enum(["offline", "maintenance", "fault", "restore", "disable", "enable", "simulate_fault"]),
 });
 
 @ApiTags("chargers-admin")
@@ -38,6 +38,8 @@ export class ChargersAdminController {
     this.tenantAccess.assertOperatorOrAbove(user);
 
     const { action } = body as z.infer<typeof chargerActionSchema>;
+    const normalized =
+      action === "disable" ? "maintenance" : action === "enable" ? "restore" : action === "simulate_fault" ? "fault" : action;
 
     const charger = await this.prisma.charger.findUnique({
       where: { id: chargerId },
@@ -52,7 +54,7 @@ export class ChargersAdminController {
     let newStatus: ChargerStatus;
     let connectorStatus: ConnectorStatus;
 
-    switch (action) {
+    switch (normalized) {
       case "offline":
         await mock.disconnect(chargerId);
         newStatus = ChargerStatus.OFFLINE;
@@ -89,7 +91,7 @@ export class ChargersAdminController {
       data: { status: newStatus, lastSeenAt: new Date() },
     });
 
-    if (action === "restore" || action === "offline") {
+    if (normalized === "restore" || normalized === "offline") {
       await this.prisma.connector.updateMany({
         where: { chargerId },
         data: { status: connectorStatus },

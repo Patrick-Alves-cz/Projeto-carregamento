@@ -9,13 +9,14 @@ import {
   ForbiddenError,
   NotFoundError,
   SessionStateError,
-  ValidationError,
   isSessionActive,
+  readTariffSnapshot,
 } from "@evcharge/domain";
 import type { ListSessionsQuery, StartSessionInput } from "@evcharge/shared";
 import {
   ChargerStatus,
   ConnectorStatus,
+  NotificationType,
   PaymentStatus,
   Prisma,
   SessionStatus,
@@ -27,11 +28,13 @@ import { TenantAccessService } from "../common/services/tenant-access.service";
 import { AuthenticatedUser } from "../common/types/auth.types";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { ChargerProviderService } from "../charging/charger-provider.service";
+import { NotificationsService } from "../notifications/notifications.service";
+import { TariffsService } from "../tariffs/tariffs.service";
 import { WalletService } from "../wallet/wallet.service";
 import { AuditLogger } from "../common/logging/audit-logger";
 
 const sessionInclude = {
-  user: { include: { profile: true } },
+  user: { include: { profile: true, wallet: true } },
   vehicle: true,
   connector: {
     include: {
@@ -44,6 +47,7 @@ const sessionInclude = {
   },
   tariff: true,
   payment: true,
+  receipt: true,
 } satisfies Prisma.ChargingSessionInclude;
 
 const ACTIVE_STATUSES: SessionStatus[] = [
@@ -66,6 +70,8 @@ export class SessionsService {
     private readonly chargerProviderService: ChargerProviderService,
     private readonly walletService: WalletService,
     private readonly events: ChargingEventsService,
+    private readonly tariffsService: TariffsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async start(input: StartSessionInput, user: AuthenticatedUser) {
@@ -100,23 +106,10 @@ export class SessionsService {
       throw new ConnectorUnavailableError("Carregador offline ou com falha");
     }
 
-    const activeTariff = await this.prisma.tariff.findFirst({
-      where: { companyId: charger.station.companyId, active: true },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!activeTariff) {
-      throw new ValidationError("Nenhuma tarifa ativa encontrada para esta estação");
-    }
+    const { tariff: activeTariff, snapshot: tariffSnapshot } =
+      await this.tariffsService.resolveForConnector(input.connectorId);
 
     await this.walletService.assertMinimumBalance(user.id, activeTariff.minBalanceCents);
-
-    const tariffSnapshot = {
-      id: activeTariff.id,
-      name: activeTariff.name,
-      pricePerKwhCents: activeTariff.pricePerKwhCents,
-      minBalanceCents: activeTariff.minBalanceCents,
-      currency: activeTariff.currency,
-    };
 
     const companyId = charger.station.companyId;
     let sessionId: string | null = null;
@@ -250,7 +243,36 @@ export class SessionsService {
         },
       });
 
-      return this.enrichSession(activeSession);
+      if (tariffSnapshot.connectionFeeCents > 0) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.walletService.debitForSession(tx, {
+            userId: user.id,
+            sessionId: activeSession.id,
+            amountCents: tariffSnapshot.connectionFeeCents,
+            description: "Taxa de conexão",
+            idempotencyKey: `connection-${activeSession.id}`,
+          });
+          await tx.chargingSession.update({
+            where: { id: activeSession.id },
+            data: { costCents: { increment: tariffSnapshot.connectionFeeCents } },
+          });
+        });
+      }
+
+      await this.notifications.notify({
+        userId: user.id,
+        type: NotificationType.SESSION_STARTED,
+        title: "Sessão iniciada",
+        body: "Sua recarga foi iniciada.",
+        payload: { sessionId: activeSession.id },
+        dedupeKey: `session-started-${activeSession.id}`,
+      });
+
+      const started = await this.prisma.chargingSession.findUniqueOrThrow({
+        where: { id: activeSession.id },
+        include: sessionInclude,
+      });
+      return this.enrichSession(started);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -303,6 +325,9 @@ export class SessionsService {
 
     assertSessionStatusTransition(session.status, "COMPLETED");
 
+    const stopReason =
+      user.role === UserRole.DRIVER ? SessionStopReason.USER_STOP : SessionStopReason.ADMIN;
+
     await this.chargerProviderService.provider.stopCharging(
       session.connector.chargerId,
       session.connector.number,
@@ -311,7 +336,7 @@ export class SessionsService {
     const completed = await this.finalizeSessionRecord(
       session,
       SessionStatus.COMPLETED,
-      SessionStopReason.USER_STOP,
+      stopReason,
       idempotencyKey,
     );
 
@@ -337,6 +362,15 @@ export class SessionsService {
       },
     });
 
+    await this.notifications.notify({
+      userId: session.userId,
+      type: NotificationType.SESSION_COMPLETED,
+      title: "Recarga finalizada",
+      body: "Sua recarga foi encerrada. O recibo já está disponível.",
+      payload: { sessionId },
+      dedupeKey: `session-completed-${sessionId}`,
+    });
+
     return completed;
   }
 
@@ -358,7 +392,7 @@ export class SessionsService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.chargingSession.update({
         where: { id: sessionId },
-        data: { status: SessionStatus.PAUSED, pausedAt: new Date() },
+        data: { status: SessionStatus.PAUSED, pausedAt: new Date(), currentPowerKw: 0 },
         include: sessionInclude,
       });
       await tx.connector.update({
@@ -381,6 +415,15 @@ export class SessionsService {
         connectorId: session.connectorId,
         companyId: session.connector.charger.station.companyId,
       },
+    });
+
+    await this.notifications.notify({
+      userId: session.userId,
+      type: NotificationType.SESSION_PAUSED,
+      title: "Sessão pausada",
+      body: "A recarga está pausada. Energia e custo não aumentam enquanto pausada.",
+      payload: { sessionId },
+      dedupeKey: `session-paused-${sessionId}-${updated.pausedAt?.toISOString() ?? "now"}`,
     });
 
     return this.enrichSession(updated);
@@ -435,6 +478,15 @@ export class SessionsService {
         connectorId: session.connectorId,
         companyId: session.connector.charger.station.companyId,
       },
+    });
+
+    await this.notifications.notify({
+      userId: session.userId,
+      type: NotificationType.SESSION_RESUMED,
+      title: "Sessão retomada",
+      body: "A recarga voltou a atualizar telemetria.",
+      payload: { sessionId },
+      dedupeKey: `session-resumed-${sessionId}-${updated.updatedAt.toISOString()}`,
     });
 
     return this.enrichSession(updated);
@@ -505,6 +557,12 @@ export class SessionsService {
     if (!session) throw new NotFoundError("ChargingSession", sessionId);
     this.assertSessionAccess(session, user);
     return this.enrichSession(session);
+  }
+
+  async getReceipt(sessionId: string, user: AuthenticatedUser) {
+    const session = await this.findOne(sessionId, user);
+    if (session.receipt) return session.receipt;
+    throw new NotFoundError("Receipt", sessionId);
   }
 
   async getActiveSessionsForOperator(user: AuthenticatedUser) {
@@ -637,6 +695,7 @@ export class SessionsService {
       if (!existingPayment && updated.costCents > 0) {
         await tx.payment.create({
           data: {
+            userId: session.userId,
             sessionId: session.id,
             amountCents: updated.costCents,
             currency: "BRL",
@@ -646,7 +705,14 @@ export class SessionsService {
         });
       }
 
-      return this.enrichSession(updated);
+      await this.ensureReceipt(tx, updated);
+
+      return this.enrichSession(
+        await tx.chargingSession.findUniqueOrThrow({
+          where: { id: session.id },
+          include: sessionInclude,
+        }),
+      );
     });
   }
 
@@ -720,6 +786,45 @@ export class SessionsService {
     });
   }
 
+  private async ensureReceipt(tx: Prisma.TransactionClient, session: SessionWithInclude) {
+    const existing = await tx.receipt.findUnique({ where: { sessionId: session.id } });
+    if (existing) return existing;
+    const snapshot = readTariffSnapshot(session.tariffSnapshot);
+    const startedAt = session.startedAt;
+    const endedAt = session.endedAt ?? new Date();
+    const durationSeconds = startedAt
+      ? Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000))
+      : 0;
+    const dateKey = endedAt.toISOString().slice(0, 10).replace(/-/g, "");
+    const payload = {
+      brand: "EV Charge",
+      station: {
+        name: session.connector.charger.station.name,
+        address: session.connector.charger.station.address,
+      },
+      charger: { serialNumber: session.connector.charger.serialNumber },
+      connector: { number: session.connector.number, type: session.connector.type },
+      vehicle: { brand: session.vehicle.brand, model: session.vehicle.model },
+      startedAt,
+      endedAt,
+      durationSeconds,
+      energyKwh: Number(session.energyKwh),
+      tariff: snapshot,
+      connectionFeeCents: snapshot?.connectionFeeCents ?? 0,
+      idleFeeCents: snapshot?.idleFeeCents ?? 0,
+      totalCents: session.costCents,
+      paymentMethod: "Carteira DEMO",
+    };
+    return tx.receipt.create({
+      data: {
+        number: `EV-${dateKey}-${session.id.slice(-6).toUpperCase()}`,
+        sessionId: session.id,
+        userId: session.userId,
+        payload,
+      },
+    });
+  }
+
   private enrichSession(
     session: SessionWithInclude & {
       meterValues?: Array<{
@@ -736,6 +841,11 @@ export class SessionsService {
       ? Math.floor(((session.endedAt ?? new Date()).getTime() - session.startedAt.getTime()) / 1000)
       : 0;
 
+    const snapshot = readTariffSnapshot(session.tariffSnapshot);
+    const walletBalanceCents = session.user.wallet?.balanceCents ?? 0;
+    const remainingCents = Math.max(0, walletBalanceCents);
+    const lowBalance = snapshot ? remainingCents < snapshot.minBalanceCents : false;
+
     return {
       ...session,
       energyKwh: Number(session.energyKwh),
@@ -747,6 +857,10 @@ export class SessionsService {
       charger: session.connector.charger,
       connector: session.connector,
       userName: session.user.profile?.fullName ?? session.user.email,
+      tariffSnapshot: snapshot ?? session.tariffSnapshot,
+      walletBalanceCents,
+      remainingCents,
+      lowBalance,
       meterValues: session.meterValues?.map((mv) => ({
         ...mv,
         energyKwh: Number(mv.energyKwh),

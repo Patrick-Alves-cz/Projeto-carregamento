@@ -18,6 +18,7 @@ export interface Connector {
   type: string;
   maxPowerKw: number;
   status: string;
+  assignedTariffId?: string | null;
 }
 
 export interface Charger {
@@ -27,6 +28,7 @@ export interface Charger {
   model: string | null;
   maxPowerKw: number;
   status: string;
+  lastSeenAt?: string | null;
   providerId: string | null;
   connectors: Connector[];
 }
@@ -51,6 +53,7 @@ export interface Station {
   lastSeenAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  tariffId?: string | null;
   availability: {
     totalConnectors: number;
     availableConnectors: number;
@@ -70,6 +73,7 @@ export interface StationInput {
   accessType?: "PUBLIC" | "PRIVATE" | "RESTRICTED";
   openingHours?: { label?: string; alwaysOpen?: boolean; timezone?: string };
   status?: "ACTIVE" | "MAINTENANCE" | "INACTIVE";
+  tariffId?: string | null;
 }
 
 export async function createStation(input: StationInput) {
@@ -101,13 +105,14 @@ export async function createConnector(input: {
   number: number;
   type: string;
   maxPowerKw: number;
+  tariffId?: string | null;
 }) {
   return apiFetch<Connector>("/connectors", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function updateConnector(
   id: string,
-  input: { type?: string; maxPowerKw?: number; status?: string },
+  input: { type?: string; maxPowerKw?: number; status?: string; tariffId?: string | null },
 ) {
   return apiFetch<Connector>(`/connectors/${id}`, { method: "PATCH", body: JSON.stringify(input) });
 }
@@ -249,12 +254,160 @@ export async function listActiveSessions() {
 
 export async function chargerDemoAction(
   chargerId: string,
-  action: "offline" | "maintenance" | "fault" | "restore",
+  action: "offline" | "maintenance" | "fault" | "restore" | "disable" | "enable" | "simulate_fault",
 ) {
   return apiFetch<{ chargerId: string; action: string; status: string }>(
     `/chargers/${chargerId}/demo-action`,
     { method: "POST", body: JSON.stringify({ action }) },
   );
+}
+
+export async function pauseSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/pause`, { method: "POST" });
+}
+
+export async function resumeSession(sessionId: string) {
+  return apiFetch<ChargingSession>(`/sessions/${sessionId}/resume`, { method: "POST" });
+}
+
+export interface Tariff {
+  id: string;
+  companyId: string;
+  name: string;
+  pricePerKwhCents: number;
+  pricePerMinuteCents: number;
+  idleFeeCents: number;
+  connectionFeeCents: number;
+  minBalanceCents: number;
+  currency: string;
+  validFrom: string | null;
+  validTo: string | null;
+  active: boolean;
+}
+
+export async function listTariffs() {
+  return apiFetch<Tariff[]>("/tariffs");
+}
+
+export async function createTariff(input: {
+  companyId: string;
+  name: string;
+  pricePerKwhCents: number;
+  pricePerMinuteCents?: number;
+  idleFeeCents?: number;
+  connectionFeeCents?: number;
+  minBalanceCents?: number;
+}) {
+  return apiFetch<Tariff>("/tariffs", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function updateTariff(id: string, input: Partial<Tariff>) {
+  return apiFetch<Tariff>(`/tariffs/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export async function deleteTariff(id: string) {
+  return apiFetch<{ id: string; deleted?: boolean; active?: boolean }>(`/tariffs/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export interface TeamPayload {
+  members: Array<{
+    id: string;
+    userId: string;
+    email: string;
+    fullName: string;
+    role: string;
+    memberRole: string;
+    status: string;
+  }>;
+  invitations: Array<{
+    id: string;
+    email: string;
+    role: string;
+    status: string;
+    expiresAt: string;
+    token?: string;
+    acceptUrl?: string;
+  }>;
+}
+
+export async function getTeam(companyId?: string) {
+  const qs = companyId ? `?companyId=${companyId}` : "";
+  return apiFetch<TeamPayload>(`/invitations${qs}`);
+}
+
+export async function createInvitation(input: { email: string; companyId: string; role: "OPERATOR" | "ADMIN" }) {
+  return apiFetch<TeamPayload["invitations"][number]>("/invitations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeInvitation(id: string) {
+  return apiFetch(`/invitations/${id}/revoke`, { method: "POST" });
+}
+
+export async function previewInvitation(token: string) {
+  const res = await fetch(`/api/proxy/invitations/${token}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(readErrorMessage(data, "Convite inválido"));
+  return data as { email: string; role: string; status: string; expiresAt: string };
+}
+
+export async function acceptInvitation(token: string, input: { fullName: string; password: string }) {
+  const res = await fetch(`/api/proxy/invitations/${token}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(readErrorMessage(data, "Não foi possível aceitar o convite"));
+  return data as { user: AuthUser; accessToken: string };
+}
+
+export async function getOpsSummary() {
+  return apiFetch<{
+    stations: number;
+    chargers: number;
+    availableChargers: number;
+    occupiedChargers: number;
+    offlineChargers: number;
+    activeSessions: number;
+    demoRevenueCents: number;
+    energyKwh: number;
+    activeCustomers: number;
+  }>("/ops/summary");
+}
+
+export async function listOpsPayments() {
+  return apiFetch<
+    Array<{
+      id: string;
+      amountCents: number;
+      method: string;
+      createdAt: string;
+      session: { connector: { charger: { station: { name: string } } }; user: { profile: { fullName: string } | null } } | null;
+    }>
+  >("/ops/payments");
+}
+
+export async function forgotPassword(email: string) {
+  const res = await fetch("/api/proxy/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  return (await res.json()) as { message: string; resetToken?: string };
+}
+
+export async function resetPassword(token: string, password: string) {
+  const res = await fetch("/api/proxy/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!res.ok) throw new Error("Não foi possível redefinir a senha");
 }
 
 const WS_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api").replace(

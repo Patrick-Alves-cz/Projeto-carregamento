@@ -19,6 +19,7 @@ export const createStationSchema = z.object({
   amenities: z.array(z.string()).default([]),
   accessType: z.enum(STATION_ACCESS_TYPES).optional().default("PUBLIC"),
   openingHours: openingHoursSchema.optional(),
+  tariffId: z.string().cuid().optional().nullable(),
 });
 
 export const updateStationSchema = createStationSchema.partial().extend({

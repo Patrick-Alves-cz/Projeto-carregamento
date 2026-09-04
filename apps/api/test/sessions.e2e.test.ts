@@ -236,7 +236,9 @@ describeIfDb("Charging Sessions E2E", () => {
       .expect(201);
 
     const energy = Number(stopped.body.energyKwh);
-    const expected = Math.round(energy * 189);
+    const price = Number(started.body.tariffSnapshot?.pricePerKwhCents ?? 189);
+    const connectionFee = Number(started.body.tariffSnapshot?.connectionFeeCents ?? 0);
+    const expected = Math.round(energy * price) + connectionFee;
     assert.ok(stopped.body.costCents >= 0);
     if (energy > 0) {
       assert.ok(Math.abs(stopped.body.costCents - expected) <= 1);

@@ -12,6 +12,8 @@ import {
   registerSchema,
   refreshTokenSchema,
   logoutSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 } from "@evcharge/shared";
 import { Public } from "../common/decorators/auth.decorators";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -99,5 +101,34 @@ export class AuthController {
   })
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.me(user.id);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post("forgot-password")
+  @ApiOperation({
+    summary: "Request a password reset",
+    description:
+      "Always returns a generic message. In non-production, a resetToken is included for local DEMO testing and is never written to logs.",
+  })
+  forgotPassword(
+    @Body(new ZodValidationPipe(forgotPasswordSchema)) body: unknown,
+  ) {
+    const { email } = body as { email: string };
+    return this.authService.forgotPassword(email);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 8, ttl: 60000 } })
+  @Post("reset-password")
+  @ApiOperation({
+    summary: "Reset password with a one-time token",
+    description: "Invalidates existing refresh tokens after a successful reset.",
+  })
+  resetPassword(
+    @Body(new ZodValidationPipe(resetPasswordSchema)) body: unknown,
+  ) {
+    const { token, password } = body as { token: string; password: string };
+    return this.authService.resetPassword(token, password);
   }
 }

@@ -44,3 +44,15 @@ export function isDriverRole(role: string): boolean {
 
 export const COMPANY_MEMBER_ROLES = ["OWNER", "ADMIN", "OPERATOR", "VIEWER"] as const;
 export type CompanyMemberRole = (typeof COMPANY_MEMBER_ROLES)[number];
+
+export const INVITE_ROLES = ["OPERATOR", "ADMIN"] as const;
+export type InviteRole = (typeof INVITE_ROLES)[number];
+
+export const WALLET_TOPUP_PRESETS_CENTS = [2000, 5000, 10000, 20000] as const;
+export const WALLET_TOPUP_MIN_CENTS = 1000;
+export const WALLET_TOPUP_MAX_CENTS = 50000;
+export const DEFAULT_MIN_BALANCE_CENTS = 1000;
+export const GENERIC_PASSWORD_RESET_MESSAGE = "Se a conta existir, enviaremos instruções.";
+
+export const WALLET_TX_KINDS = ["DEPOSIT", "CHARGE", "REFUND", "ADJUSTMENT"] as const;
+export type WalletTxKind = (typeof WALLET_TX_KINDS)[number];

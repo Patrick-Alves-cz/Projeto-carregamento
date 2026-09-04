@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { login, logout } from "../lib/api-client";
 import { isDriverRole } from "@evcharge/shared";
@@ -83,6 +83,9 @@ export default function LoginScreen() {
           style={({ pressed }) => [styles.button, pressed && styles.pressed, loading && styles.disabled]}
         >
           <Text style={styles.buttonText}>{loading ? "Entrando…" : "Entrar"}</Text>
+        </Pressable>
+        <Pressable onPress={() => router.push("/forgot-password" as Href)}>
+          <Text style={styles.register}>Esqueci minha senha</Text>
         </Pressable>
         <Pressable onPress={() => router.push("/register")}>
           <Text style={styles.register}>Criar conta de motorista</Text>

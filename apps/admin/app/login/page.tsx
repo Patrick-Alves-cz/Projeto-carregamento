@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Zap } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -78,6 +79,11 @@ export default function LoginPage() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Entrando…" : "Entrar"}
             </Button>
+            <p className="text-center text-sm">
+              <Link href="/forgot-password" className="text-primary hover:underline">
+                Esqueci minha senha
+              </Link>
+            </p>
             <p className="text-center text-xs text-muted-foreground">
               Demo: admin.sp@evcharge.demo / Demo@12345
             </p>

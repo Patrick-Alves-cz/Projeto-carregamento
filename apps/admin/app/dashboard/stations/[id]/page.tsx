@@ -23,7 +23,7 @@ export default function StationDetailPage() {
 
   async function runAction(
     chargerId: string,
-    action: "offline" | "maintenance" | "fault" | "restore",
+    action: "offline" | "maintenance" | "fault" | "restore" | "disable" | "enable" | "simulate_fault",
   ) {
     setActionBusy(`${chargerId}-${action}`);
     try {
@@ -143,6 +143,9 @@ export default function StationDetailPage() {
                     <CardTitle className="font-mono text-base">{charger.serialNumber}</CardTitle>
                     <CardDescription>
                       {charger.model ?? "Modelo não informado"} · {charger.maxPowerKw} kW
+                      {charger.lastSeenAt
+                        ? ` · última comunicação ${new Date(charger.lastSeenAt).toLocaleString("pt-BR")}`
+                        : ""}
                     </CardDescription>
                   </div>
                   <StatusBadge kind="charger" status={charger.status} />
@@ -166,21 +169,29 @@ export default function StationDetailPage() {
                   >
                     Manutenção
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={actionBusy !== null}
-                    onClick={() => runAction(charger.id, "fault")}
-                  >
-                    Simular falha
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={actionBusy !== null}
-                    onClick={() => runAction(charger.id, "restore")}
-                  >
-                    Restaurar
-                  </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={actionBusy !== null}
+                      onClick={() => runAction(charger.id, "disable")}
+                    >
+                      Desabilitar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={actionBusy !== null}
+                      onClick={() => runAction(charger.id, "simulate_fault")}
+                    >
+                      Simular falha
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={actionBusy !== null}
+                      onClick={() => runAction(charger.id, "enable")}
+                    >
+                      Habilitar
+                    </Button>
                 </div>
                 <div className="space-y-2">
                   {charger.connectors.map((connector) => (

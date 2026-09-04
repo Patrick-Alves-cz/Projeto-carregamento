@@ -3,7 +3,12 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter, type Href } from "expo-router";
 import { ScreenState } from "../../../components/screen-state";
 import { listSessions, type ChargingSession } from "../../../lib/api-client";
-import { formatCurrency, formatEnergy, sessionStatusLabel } from "../../../lib/labels";
+import {
+  formatCurrency,
+  formatDuration,
+  formatEnergy,
+  sessionStatusLabel,
+} from "../../../lib/labels";
 import { colors, radius } from "../../../lib/theme";
 
 export default function HistoryScreen() {
@@ -36,8 +41,14 @@ export default function HistoryScreen() {
               <Text style={styles.status}>{sessionStatusLabel(item.status)}</Text>
             </View>
             <Text style={styles.meta}>
-              {formatEnergy(item.energyKwh)} · {formatCurrency(item.costCents)}
+              {item.vehicle.brand} {item.vehicle.model} · {item.connector.type}
             </Text>
+            <Text style={styles.meta}>
+              {formatDuration(item.durationSeconds)} · {formatEnergy(item.energyKwh)} · {formatCurrency(item.costCents)}
+            </Text>
+            {item.tariffSnapshot ? (
+              <Text style={styles.meta}>{formatCurrency(item.tariffSnapshot.pricePerKwhCents)} / kWh</Text>
+            ) : null}
             {item.startedAt ? (
               <Text style={styles.date}>{new Date(item.startedAt).toLocaleString("pt-BR")}</Text>
             ) : null}

@@ -9,9 +9,12 @@ import {
 import {
   ForbiddenError,
   NotFoundError,
+  ValidationError,
   connectorMatchesCurrentType,
   isVehicleCompatibleWithConnector,
+  pickEffectiveTariff,
   stationCurrentType,
+  type TariffLike,
 } from "@evcharge/domain";
 import type {
   CreateStationInput,
@@ -34,16 +37,18 @@ const OCCUPIED_STATUSES: ConnectorStatus[] = [
 const OFFLINE_CHARGER_STATUSES = new Set(["OFFLINE", "FAULTED", "UNAVAILABLE"]);
 
 const stationInclude = {
+  tariff: true,
   chargers: {
-    include: { connectors: { orderBy: { number: "asc" as const } } },
+    include: {
+      connectors: { include: { tariff: true }, orderBy: { number: "asc" as const } },
+    },
     orderBy: { serialNumber: "asc" as const },
   },
   company: {
     include: {
       tariffs: {
         where: { active: true },
-        orderBy: { createdAt: "desc" as const },
-        take: 1,
+        orderBy: { createdAt: "asc" as const },
       },
     },
   },
@@ -177,6 +182,7 @@ export class StationsService {
     this.tenantAccess.assertOperatorOrAbove(user);
     const companyId = this.resolveCompanyId(user);
     this.tenantAccess.assertCompanyAccess(user, companyId);
+    if (input.tariffId) await this.assertCompanyTariff(input.tariffId, companyId);
 
     const station = await this.prisma.station.create({
       data: {
@@ -190,6 +196,7 @@ export class StationsService {
         amenities: input.amenities,
         accessType: input.accessType,
         openingHours: (input.openingHours ?? {}) as Prisma.InputJsonValue,
+        tariffId: input.tariffId ?? undefined,
       },
       include: stationInclude,
     });
@@ -201,6 +208,7 @@ export class StationsService {
     if (!station) throw new NotFoundError("Station", id);
     this.tenantAccess.assertCompanyAccess(user, station.companyId);
     this.tenantAccess.assertOperatorOrAbove(user);
+    if (input.tariffId) await this.assertCompanyTariff(input.tariffId, station.companyId);
 
     const updated = await this.prisma.station.update({
       where: { id },
@@ -215,6 +223,7 @@ export class StationsService {
         accessType: input.accessType,
         status: input.status,
         openingHours: input.openingHours as Prisma.InputJsonValue | undefined,
+        tariffId: input.tariffId === undefined ? undefined : input.tariffId,
       },
       include: stationInclude,
     });
@@ -268,7 +277,7 @@ export class StationsService {
     const connectors = station.chargers.flatMap((charger) =>
       charger.connectors.map((connector) => ({ charger, connector })),
     );
-    const tariff = station.company.tariffs[0];
+    const tariff = this.tariffForStation(station);
 
     if (filters.maxPrice !== undefined) {
       if (!tariff || tariff.pricePerKwhCents > maxPriceToCents(filters.maxPrice)) {
@@ -372,6 +381,9 @@ export class StationsService {
       maxPowerKw: summary.maxPowerKw,
       pricePerKwhCents: summary.pricePerKwhCents,
       currency: summary.currency,
+      connectionFeeCents: this.tariffForStation(station)?.connectionFeeCents ?? 0,
+      idleFeeCents: this.tariffForStation(station)?.idleFeeCents ?? 0,
+      tariffId: station.tariffId,
       compatible: summary.compatible,
       crowded: summary.totalConnectors > 0 && summary.availableConnectors === 0,
       reliability: {
@@ -404,9 +416,9 @@ export class StationsService {
             type: connector.type,
             maxPowerKw: Number(connector.maxPowerKw),
             status: connector.status,
+            assignedTariffId: connector.tariffId,
             compatible,
-            pricePerKwhCents: summary.pricePerKwhCents,
-            currency: summary.currency,
+            ...this.connectorTariffView(station, connector),
             action: this.connectorAction(
               station.status,
               charger.status,
@@ -431,7 +443,7 @@ export class StationsService {
       if (!latest || charger.lastSeenAt > latest) return charger.lastSeenAt;
       return latest;
     }, null);
-    const tariff = station.company.tariffs[0];
+    const tariff = this.tariffForStation(station);
     const compatible =
       vehicleTypes === null
         ? null
@@ -476,5 +488,52 @@ export class StationsService {
       throw new ForbiddenError("User has no company membership");
     }
     return user.companyIds[0]!;
+  }
+
+  private asTariffLike(tariff: NonNullable<StationRecord["tariff"]>): TariffLike {
+    return tariff;
+  }
+
+  private tariffForConnector(
+    station: StationRecord,
+    connector: StationRecord["chargers"][number]["connectors"][number],
+  ): TariffLike | null {
+    return pickEffectiveTariff({
+      connectorTariff: connector.tariff ? this.asTariffLike(connector.tariff) : null,
+      stationTariff: station.tariff ? this.asTariffLike(station.tariff) : null,
+      companyTariffs: station.company.tariffs.map((item) => this.asTariffLike(item)),
+    });
+  }
+
+  private tariffForStation(station: StationRecord): TariffLike | null {
+    const firstConnector = station.chargers[0]?.connectors[0];
+    if (firstConnector) return this.tariffForConnector(station, firstConnector);
+    return pickEffectiveTariff({
+      stationTariff: station.tariff ? this.asTariffLike(station.tariff) : null,
+      companyTariffs: station.company.tariffs.map((item) => this.asTariffLike(item)),
+    });
+  }
+
+  private connectorTariffView(
+    station: StationRecord,
+    connector: StationRecord["chargers"][number]["connectors"][number],
+  ) {
+    const tariff = this.tariffForConnector(station, connector);
+    return {
+      tariffId: tariff?.id ?? null,
+      pricePerKwhCents: tariff?.pricePerKwhCents ?? null,
+      pricePerMinuteCents: tariff?.pricePerMinuteCents ?? 0,
+      idleFeeCents: tariff?.idleFeeCents ?? 0,
+      connectionFeeCents: tariff?.connectionFeeCents ?? 0,
+      currency: tariff?.currency ?? "BRL",
+    };
+  }
+
+  private async assertCompanyTariff(tariffId: string, companyId: string) {
+    const tariff = await this.prisma.tariff.findUnique({ where: { id: tariffId } });
+    if (!tariff) throw new NotFoundError("Tariff", tariffId);
+    if (tariff.companyId !== companyId) {
+      throw new ValidationError("Tarifa não pertence a esta empresa");
+    }
   }
 }

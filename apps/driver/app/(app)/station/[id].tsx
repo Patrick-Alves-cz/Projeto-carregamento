@@ -208,9 +208,9 @@ export default function StationDetailScreen() {
                         : ""}
                     </Text>
                     {connector.compatible === true ? (
-                      <Text style={styles.ok}>Compatível com seu veículo</Text>
+                      <Text style={styles.ok}>✓ Compatível</Text>
                     ) : connector.compatible === false ? (
-                      <Text style={styles.bad}>Não compatível</Text>
+                      <Text style={styles.bad}>✕ Incompatível</Text>
                     ) : null}
                   </View>
                   <View style={styles.connectorActions}>
@@ -247,6 +247,16 @@ export default function StationDetailScreen() {
                 ? `${formatCurrency(confirmConnector.pricePerKwhCents)} / kWh`
                 : "Tarifa da estação"}
             </Text>
+            {(confirmConnector?.connectionFeeCents ?? station.connectionFeeCents ?? 0) > 0 ? (
+              <Text style={styles.modalLine}>
+                Taxa de conexão: {formatCurrency(confirmConnector?.connectionFeeCents ?? station.connectionFeeCents ?? 0)}
+              </Text>
+            ) : null}
+            {(confirmConnector?.idleFeeCents ?? station.idleFeeCents ?? 0) > 0 ? (
+              <Text style={styles.modalLine}>
+                Ociosidade: {formatCurrency(confirmConnector?.idleFeeCents ?? station.idleFeeCents ?? 0)}/min
+              </Text>
+            ) : null}
             <Text style={styles.modalLine}>
               Veículo: {selectedVehicle ? `${selectedVehicle.brand} ${selectedVehicle.model}` : "Não selecionado"}
             </Text>

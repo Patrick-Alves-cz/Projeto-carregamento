@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createCompanySchema, registerSchema } from "./index";
+import { createCompanySchema, registerSchema, walletTopUpSchema } from "./index";
 
 describe("createCompanySchema", () => {
   it("validates a valid company", () => {
@@ -39,5 +39,17 @@ describe("registerSchema", () => {
       role: "ADMIN",
     });
     assert.equal(result.success, false);
+  });
+});
+
+describe("walletTopUpSchema", () => {
+  it("accepts preset amounts in cents", () => {
+    const result = walletTopUpSchema.safeParse({ amountCents: 2000 });
+    assert.equal(result.success, true);
+  });
+
+  it("rejects negative or tiny amounts", () => {
+    assert.equal(walletTopUpSchema.safeParse({ amountCents: -1 }).success, false);
+    assert.equal(walletTopUpSchema.safeParse({ amountCents: 50 }).success, false);
   });
 });

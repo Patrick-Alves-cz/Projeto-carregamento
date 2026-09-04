@@ -21,16 +21,21 @@ export async function middleware(request: NextRequest) {
   const payload = await readAccessPayload(access);
   const role = typeof payload?.role === "string" ? payload.role : null;
   const isLogin = request.nextUrl.pathname.startsWith("/login");
+  const isPublic =
+    isLogin ||
+    request.nextUrl.pathname.startsWith("/invite") ||
+    request.nextUrl.pathname.startsWith("/forgot-password") ||
+    request.nextUrl.pathname.startsWith("/reset-password");
   const hasSession = Boolean(payload || refresh);
 
-  if (payload && !isAdminPanelRole(role ?? "")) {
+  if (payload && !isAdminPanelRole(role ?? "") && !isPublic) {
     const response = NextResponse.redirect(new URL("/login", request.url));
     response.cookies.set("evcharge_access", "", { path: "/", maxAge: 0 });
     response.cookies.set("evcharge_refresh", "", { path: "/", maxAge: 0 });
     return response;
   }
 
-  if (!hasSession && !isLogin) {
+  if (!hasSession && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
@@ -42,5 +47,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/login"],
+  matcher: ["/dashboard/:path*", "/login", "/invite/:path*", "/forgot-password", "/reset-password"],
 };

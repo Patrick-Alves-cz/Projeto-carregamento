@@ -46,11 +46,21 @@ export class ConnectorsService {
     });
     if (!charger) throw new NotFoundError("Charger", input.chargerId);
     this.tenantAccess.assertCompanyAccess(user, charger.station.companyId);
+    if (input.tariffId) {
+      const tariff = await this.prisma.tariff.findUnique({ where: { id: input.tariffId } });
+      if (!tariff || tariff.companyId !== charger.station.companyId) {
+        throw new ForbiddenError("Tarifa inválida para esta empresa");
+      }
+    }
 
     try {
       const connector = await this.prisma.connector.create({
         data: {
-          ...input,
+          chargerId: input.chargerId,
+          number: input.number,
+          type: input.type,
+          maxPowerKw: input.maxPowerKw,
+          tariffId: input.tariffId ?? undefined,
           status: "AVAILABLE",
         },
       });
@@ -69,6 +79,12 @@ export class ConnectorsService {
     if (!connector) throw new NotFoundError("Connector", id);
     this.tenantAccess.assertCompanyAccess(user, connector.charger.station.companyId);
     this.tenantAccess.assertOperatorOrAbove(user);
+    if (input.tariffId) {
+      const tariff = await this.prisma.tariff.findUnique({ where: { id: input.tariffId } });
+      if (!tariff || tariff.companyId !== connector.charger.station.companyId) {
+        throw new ForbiddenError("Tarifa inválida para esta empresa");
+      }
+    }
 
     const updated = await this.prisma.connector.update({ where: { id }, data: input });
     await this.chargerProvider.syncCharger(connector.chargerId);

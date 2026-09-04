@@ -6,6 +6,7 @@ export const createConnectorSchema = z.object({
   number: z.number().int().positive(),
   type: z.enum(CONNECTOR_TYPES),
   maxPowerKw: z.number().positive(),
+  tariffId: z.string().cuid().optional().nullable(),
 });
 
 export const updateConnectorSchema = z.object({
@@ -22,6 +23,7 @@ export const updateConnectorSchema = z.object({
       "FAULTED",
     ])
     .optional(),
+  tariffId: z.string().cuid().optional().nullable(),
 });
 
 export type CreateConnectorInput = z.infer<typeof createConnectorSchema>;

@@ -165,6 +165,83 @@ export class AuthService {
     return this.sanitizeUser(user);
   }
 
+  async issueSessionForUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        profile: true,
+        companyMembers: { include: { company: true } },
+      },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE) throw new UnauthorizedError("Invalid credentials");
+    const tokens = await this.issueTokens(user);
+    return { user: this.sanitizeUser(user), ...tokens };
+  }
+
+  async forgotPassword(email: string) {
+    const generic = {
+      message: "Se a conta existir, enviaremos instruções.",
+    };
+    const user = await this.prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      return generic;
+    }
+
+    await this.prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const token = randomBytes(32).toString("base64url");
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      },
+    });
+
+    this.audit.info("auth.password.forgot", { userId: user.id });
+    if (process.env.NODE_ENV !== "production") {
+      return { ...generic, resetToken: token };
+    }
+    return generic;
+  }
+
+  async resetPassword(token: string, password: string) {
+    const stored = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash: hashToken(token) },
+    });
+    if (!stored || stored.usedAt || stored.expiresAt < new Date()) {
+      throw new UnauthorizedError("Token de recuperação inválido ou expirado");
+    }
+
+    const passwordHash = await bcrypt.hash(password, this.bcryptRounds);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: stored.userId },
+        data: { passwordHash },
+      });
+      await tx.passwordResetToken.update({
+        where: { id: stored.id },
+        data: { usedAt: new Date() },
+      });
+      await tx.passwordResetToken.updateMany({
+        where: { userId: stored.userId, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId: stored.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
+
+    this.audit.info("auth.password.reset", { userId: stored.userId });
+    return { success: true };
+  }
+
   private async issueTokens(
     user: {
       id: string;

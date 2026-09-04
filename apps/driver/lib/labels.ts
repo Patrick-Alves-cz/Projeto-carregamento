@@ -155,3 +155,10 @@ export function ctaLabel(action: string) {
   if (action === "OCCUPIED") return "Carregador ocupado";
   return "Indisponível";
 }
+
+export function walletKindLabel(kind: string) {
+  if (kind === "DEPOSIT") return "Depósito";
+  if (kind === "CHARGE") return "Recarga";
+  if (kind === "REFUND") return "Reembolso";
+  return "Ajuste";
+}

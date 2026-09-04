@@ -28,6 +28,18 @@ async function main() {
   console.log("Seeding demo data...");
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 12);
 
+  await prisma.inAppNotification.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.passwordResetToken.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.invitation.deleteMany({
+    where: { company: { slug: { in: COMPANY_SLUGS } } },
+  });
+  await prisma.receipt.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
   await prisma.refreshToken.deleteMany({
     where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });
@@ -372,15 +384,43 @@ async function main() {
 
   await prisma.tariff.createMany({
     data: [
-      { companyId: companySp.id, name: "Tarifa SP Padrão", pricePerKwhCents: 189, minBalanceCents: 500 },
-      { companyId: companyRj.id, name: "Tarifa RJ Padrão", pricePerKwhCents: 175, minBalanceCents: 500 },
-      { companyId: companyMt.id, name: "Tarifa MT Padrão", pricePerKwhCents: 189, minBalanceCents: 500 },
+      {
+        companyId: companySp.id,
+        name: "Tarifa SP Padrão",
+        pricePerKwhCents: 189,
+        pricePerMinuteCents: 0,
+        idleFeeCents: 0,
+        connectionFeeCents: 0,
+        minBalanceCents: 1000,
+      },
+      {
+        companyId: companyRj.id,
+        name: "Tarifa RJ Padrão",
+        pricePerKwhCents: 175,
+        minBalanceCents: 1000,
+      },
+      {
+        companyId: companyMt.id,
+        name: "Tarifa MT Padrão",
+        pricePerKwhCents: 189,
+        minBalanceCents: 1000,
+      },
     ],
   });
 
   for (const driver of drivers) {
-    await prisma.wallet.create({
+    const wallet = await prisma.wallet.create({
       data: { userId: driver.id, balanceCents: 10000, currency: "BRL" },
+    });
+    await prisma.walletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        type: "CREDIT",
+        kind: "DEPOSIT",
+        amountCents: 10000,
+        balanceAfterCents: 10000,
+        description: "Saldo inicial DEMO",
+      },
     });
   }
 

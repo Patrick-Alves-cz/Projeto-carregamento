@@ -8,11 +8,13 @@ import {
   calculateCostCents,
   InsufficientBalanceError,
   isSessionActive,
+  readTariffSnapshot,
 } from "@evcharge/domain";
 import type { MeterValueCallbackEvent, StatusChangeCallbackEvent } from "@evcharge/charger-provider";
 import {
   ChargerStatus,
   ConnectorStatus,
+  NotificationType,
   Prisma,
   SessionStatus,
   SessionStopReason,
@@ -21,6 +23,7 @@ import { PrismaService } from "../common/database/database.module";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { ChargerProviderService } from "../charging/charger-provider.service";
 import { fromProviderChargerStatus, fromProviderConnectorStatus } from "../charging/utils/charger-status.util";
+import { NotificationsService } from "../notifications/notifications.service";
 import { WalletService } from "../wallet/wallet.service";
 
 @Injectable()
@@ -34,6 +37,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly chargerProviderService: ChargerProviderService,
     private readonly events: ChargingEventsService,
     private readonly walletService: WalletService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   onModuleInit(): void {
@@ -57,15 +61,23 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     try {
       const session = await this.prisma.chargingSession.findUnique({
         where: { id: event.sessionId },
-        include: { connector: { include: { charger: { include: { station: true } } } } },
+        include: {
+          connector: { include: { charger: { include: { station: true } } } },
+          user: { include: { wallet: true } },
+        },
       });
 
       if (!session || session.status !== SessionStatus.ACTIVE) return;
 
-      const snapshot = session.tariffSnapshot as { pricePerKwhCents: number };
-      const costCents = calculateCostCents(event.reading.energyKwh, snapshot.pricePerKwhCents);
+      const snapshot = readTariffSnapshot(session.tariffSnapshot);
+      const energyCost = calculateCostCents(
+        event.reading.energyKwh,
+        snapshot?.pricePerKwhCents ?? 0,
+      );
+      const costCents = energyCost + (snapshot?.connectionFeeCents ?? 0);
       const previousCostCents = session.costCents;
       const deltaCents = costCents - previousCostCents;
+      let remainingAfter = session.user.wallet?.balanceCents ?? 0;
 
       await this.prisma.$transaction(async (tx) => {
         await tx.chargingSession.update({
@@ -93,7 +105,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
 
         if (deltaCents > 0) {
           try {
-            await this.walletService.debitForSession(tx, {
+            remainingAfter = await this.walletService.debitForSession(tx, {
               userId: session.userId,
               sessionId: session.id,
               amountCents: deltaCents,
@@ -108,6 +120,18 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           }
         }
       });
+
+      const minBalance = snapshot?.minBalanceCents ?? 1000;
+      if (remainingAfter < minBalance) {
+        await this.notifications.notify({
+          userId: session.userId,
+          type: NotificationType.LOW_BALANCE,
+          title: "Seu saldo está baixo",
+          body: "Adicione saldo para continuar a recarga.",
+          payload: { sessionId: session.id, remainingCents: remainingAfter },
+          dedupeKey: `low-balance-${session.id}`,
+        });
+      }
 
       await this.events.publish({
         type: "meter.value",
@@ -146,6 +170,20 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       if (error instanceof InsufficientBalanceError) {
         this.logger.warn(`Session ${event.sessionId} stopped due to insufficient balance`);
+        const failed = await this.prisma.chargingSession.findUnique({
+          where: { id: event.sessionId },
+          select: { userId: true },
+        });
+        if (failed) {
+          await this.notifications.notify({
+            userId: failed.userId,
+            type: NotificationType.SESSION_INSUFFICIENT_BALANCE,
+            title: "Recarga encerrada",
+            body: "A sessão foi encerrada porque o saldo acabou.",
+            payload: { sessionId: event.sessionId },
+            dedupeKey: `session-insufficient-${event.sessionId}`,
+          });
+        }
         return;
       }
       this.logger.error(`Failed to process meter value for session ${event.sessionId}`, error);
