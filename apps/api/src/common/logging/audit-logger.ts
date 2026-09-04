@@ -9,6 +9,8 @@ const REDACT_KEYS = new Set([
   "authorization",
   "cookie",
   "tokenHash",
+  "credentialHash",
+  "credential",
 ]);
 
 function sanitize(data: Record<string, unknown>): Record<string, unknown> {

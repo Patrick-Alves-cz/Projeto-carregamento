@@ -1,11 +1,12 @@
-import { Injectable } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
+import { Injectable, Optional } from "@nestjs/common";
+import { UserRole, ChargerStatus } from "@prisma/client";
 import { ConflictError, ForbiddenError, NotFoundError, assertChargerStatusTransition } from "@evcharge/domain";
 import type { CreateChargerInput, UpdateChargerInput } from "@evcharge/shared";
 import { PrismaService } from "../common/database/database.module";
 import { TenantAccessService } from "../common/services/tenant-access.service";
 import { AuthenticatedUser } from "../common/types/auth.types";
 import { ChargerProviderService } from "../charging/charger-provider.service";
+import { OcppConnectionManager } from "../ocpp/ocpp-connection.manager";
 
 @Injectable()
 export class ChargersService {
@@ -13,16 +14,18 @@ export class ChargersService {
     private prisma: PrismaService,
     private tenantAccess: TenantAccessService,
     private chargerProvider: ChargerProviderService,
+    @Optional() private readonly connections?: OcppConnectionManager,
   ) {}
 
   async findAll(stationId: string | undefined, user: AuthenticatedUser) {
     this.assertAdminSurface(user);
     const stations = await this.getAccessibleStationIds(user, stationId);
-    return this.prisma.charger.findMany({
+    const chargers = await this.prisma.charger.findMany({
       where: { stationId: { in: stations } },
       include: { connectors: true, station: true },
       orderBy: { createdAt: "desc" },
     });
+    return chargers.map((charger) => this.withOcppOverlay(charger));
   }
 
   async findOne(id: string, user: AuthenticatedUser) {
@@ -35,7 +38,7 @@ export class ChargersService {
     if (!this.tenantAccess.isSuperAdmin(user)) {
       this.tenantAccess.assertCompanyAccess(user, charger.station.companyId);
     }
-    return charger;
+    return this.withOcppOverlay(charger);
   }
 
   async create(input: CreateChargerInput, user: AuthenticatedUser) {
@@ -46,13 +49,21 @@ export class ChargersService {
     if (!station) throw new NotFoundError("Station", input.stationId);
     this.tenantAccess.assertCompanyAccess(user, station.companyId);
 
+    const providerId = input.providerId ?? "mock";
+    const ocpp = this.chargerProvider.usesOcpp(providerId);
     try {
       const charger = await this.prisma.charger.create({
         data: {
-          ...input,
-          status: "AVAILABLE",
-          lastSeenAt: new Date(),
-          providerId: input.providerId ?? "mock",
+          stationId: input.stationId,
+          serialNumber: input.serialNumber,
+          identity: input.identity ?? input.serialNumber,
+          model: input.model,
+          vendor: input.vendor,
+          maxPowerKw: input.maxPowerKw,
+          providerId,
+          protocol: ocpp ? "ocpp1.6" : null,
+          status: ocpp ? ChargerStatus.OFFLINE : ChargerStatus.AVAILABLE,
+          lastSeenAt: ocpp ? null : new Date(),
         },
         include: { connectors: true },
       });
@@ -83,6 +94,26 @@ export class ChargersService {
     });
     await this.chargerProvider.syncCharger(updated.id);
     return updated;
+  }
+
+  private withOcppOverlay<
+    T extends {
+      id: string;
+      status: string;
+      lastSeenAt: Date | null;
+      protocol: string | null;
+      providerId: string | null;
+    },
+  >(charger: T) {
+    const conn = this.connections?.get(charger.id);
+    const ocpp = this.chargerProvider.usesOcpp(charger.providerId);
+    return {
+      ...charger,
+      protocolLabel: ocpp ? "OCPP 1.6" : charger.protocol ?? "mock",
+      ocppOnline: ocpp ? Boolean(this.connections?.isOnline(charger.id)) : charger.status !== "OFFLINE",
+      ocppConnectedAt: conn?.connectedAt ?? null,
+      lastSeenAt: conn?.lastMessageAt ?? charger.lastSeenAt,
+    };
   }
 
   private assertAdminSurface(user: AuthenticatedUser) {

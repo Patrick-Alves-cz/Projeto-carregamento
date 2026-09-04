@@ -71,6 +71,8 @@ No [Supabase Dashboard](https://supabase.com/dashboard), acesse **Project Settin
 | `pnpm db:migrate` | Cria/aplica migrations |
 | `pnpm db:seed` | Popula dados demo (idempotente) |
 | `pnpm db:studio` | Abre Prisma Studio |
+| `pnpm simulator` | Simulador mock legado |
+| `pnpm charger:simulator` | Simulador OCPP 1.6J (`EVSE-CUIABA-001`) |
 
 ## Apps
 
@@ -93,15 +95,16 @@ Pressione `w` no terminal do Expo para abrir a versão web em http://localhost:8
 
 ```
 apps/
-  api/                  # NestJS REST API
+  api/                  # NestJS REST API + gateway OCPP 1.6J
   admin/                # Next.js painel administrativo
   driver/               # Expo app motorista
-  charger-simulator/    # Simulador de carregador (dev/demo)
+  charger-simulator/    # Simulador OCPP 1.6J (e modo mock)
 
 packages/
   domain/               # Regras de negócio e erros de domínio
   database/             # Prisma schema e client
-  charger-provider/     # Abstração ChargerProvider
+  charger-provider/     # Abstração ChargerProvider (Mock + OCPP)
+  ocpp/                 # Framing, schemas e mappers OCPP 1.6J
   shared/               # Schemas Zod, tipos e constantes
   ui/                   # Componentes UI compartilhados
 ```
@@ -162,7 +165,8 @@ Documentação interativa: **http://localhost:3001/api/docs**
 - `GET /api/sessions/:id` — Detalhe da sessão
 - `GET /api/sessions/active/live` — Sessões ativas (operador)
 
-WebSocket: `ws://localhost:3001/realtime` (JWT no `auth.token`)
+WebSocket frontend: `ws://localhost:3001/realtime` (JWT no `auth.token`)  
+WebSocket OCPP: `ws://localhost:3001/ocpp/{identity}` (subprotocolo `ocpp1.6`, Basic auth de equipamento)
 
 ## Roles
 
@@ -182,26 +186,41 @@ Senha de todos os usuários demo: `Demo@12345`
 | Super admin | `superadmin@evcharge.demo` |
 | Operador SP | `operator.sp@evcharge.demo` |
 | Operador RJ | `operator.rj@evcharge.demo` |
+| Operador MT | `operator.mt@evcharge.demo` |
 | Admin SP | `admin.sp@evcharge.demo` |
 | Motoristas | `driver1@evcharge.demo` … `driver5@evcharge.demo` |
 
-Empresas: `evcharge-sp`, `evcharge-rj` — 5 estações, 15 carregadores, 15+ conectores.
-Wallets demo: R$ 100,00 por motorista. Tarifas: R$ 1,89/kWh (SP), R$ 1,75/kWh (RJ).
+Empresas: `evcharge-sp`, `evcharge-rj`, `evcharge-mt` — estações, carregadores mock e um charger OCPP `EVSE-CUIABA-001` (OFFLINE até o simulador conectar).
+Wallets demo: R$ 100,00 por motorista. Tarifas: R$ 1,89/kWh (SP/MT), R$ 1,75/kWh (RJ).
 
-## Simulador
+## OCPP 1.6J
 
-A recarga ao vivo é simulada pelo `MockChargerProvider` **dentro da API**.
+A recarga mock continua no `MockChargerProvider` **dentro da API** (`CHARGER_PROVIDER_TYPE=mock`).
 
-O processo standalone serve para observar carregadores virtuais:
+Carregadores com `providerId=ocpp16` falam OCPP 1.6J:
+
+```bash
+pnpm --filter @evcharge/api dev
+
+CHARGER_ID=EVSE-CUIABA-001 \
+OCPP_URL=ws://localhost:3001/ocpp \
+CHARGER_SECRET=DemoCharger@12345 \
+pnpm charger:simulator
+```
+
+Fluxo: Driver start → RemoteStartTransaction → StartTransaction → MeterValues → Driver stop → RemoteStopTransaction → StopTransaction → recibo.
+
+Documentação completa: [docs/ocpp.md](docs/ocpp.md)
+
+O simulador mock legado permanece:
 
 ```bash
 pnpm simulator
-# ou com cenário
-pnpm --filter @evcharge/charger-simulator dev -- --scenario FAST --meter-interval 2000
+pnpm --filter @evcharge/charger-simulator dev -- --mode mock --scenario FAST --meter-interval 2000
 ```
 
 ## Fase atual
 
-**Fase 2 — Simulação completa de recarga**: sessões, telemetria, wallet DEMO, WebSocket, admin operacional e tela de recarga no Driver.
+**Fase 4 — OCPP 1.6J**: gateway WebSocket, autenticação de equipamento, telemetria, simulador de charge point e Admin operacional. O mock permanece para os testes das fases anteriores.
 
-Próxima fase: OCPP real (1.6 / 2.0.1 / 2.1) e gateway de pagamento.
+Não iniciar Fase 5 automaticamente (pagamentos reais, OCPP 2.x, reservas).

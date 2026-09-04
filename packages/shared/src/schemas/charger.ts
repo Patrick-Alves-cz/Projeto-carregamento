@@ -3,7 +3,9 @@ import { z } from "zod";
 export const createChargerSchema = z.object({
   stationId: z.string().cuid(),
   serialNumber: z.string().min(2).max(100),
+  identity: z.string().min(2).max(100).optional(),
   model: z.string().min(1).max(100).optional(),
+  vendor: z.string().min(1).max(100).optional(),
   maxPowerKw: z.number().positive(),
   providerId: z.string().optional(),
 });

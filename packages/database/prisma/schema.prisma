@@ -278,21 +278,30 @@ model Station {
 }
 
 model Charger {
-  id           String        @id @default(cuid())
-  stationId    String        @map("station_id")
-  serialNumber String        @unique @map("serial_number")
-  model        String?
-  maxPowerKw   Decimal       @map("max_power_kw") @db.Decimal(10, 2)
-  status       ChargerStatus @default(OFFLINE)
-  providerId   String?       @map("provider_id")
-  lastSeenAt   DateTime?     @map("last_seen_at")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  id                      String        @id @default(cuid())
+  stationId               String        @map("station_id")
+  identity                String        @unique
+  serialNumber            String        @unique @map("serial_number")
+  model                   String?
+  vendor                  String?
+  firmwareVersion         String?       @map("firmware_version")
+  chargePointSerialNumber String?       @map("charge_point_serial_number")
+  protocol                String?
+  maxPowerKw              Decimal       @map("max_power_kw") @db.Decimal(10, 2)
+  status                  ChargerStatus @default(OFFLINE)
+  providerId              String?       @map("provider_id")
+  lastSeenAt              DateTime?     @map("last_seen_at")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
 
-  station    Station     @relation(fields: [stationId], references: [id], onDelete: Cascade)
-  connectors Connector[]
+  station      Station             @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connectors   Connector[]
+  credentials  ChargerCredential[]
+  ocppTxs      OcppTransaction[]
+  chargerEvents ChargerEvent[]
 
   @@index([stationId, status])
+  @@index([providerId])
   @@map("chargers")
 }
 
@@ -310,6 +319,7 @@ model Connector {
   charger          Charger           @relation(fields: [chargerId], references: [id], onDelete: Cascade)
   tariff           Tariff?           @relation(fields: [tariffId], references: [id], onDelete: SetNull)
   chargingSessions ChargingSession[]
+  ocppTxs          OcppTransaction[]
 
   @@unique([chargerId, number])
   @@index([chargerId, status])
@@ -361,7 +371,10 @@ model ChargingSession {
   currentPowerKw  Decimal?           @map("current_power_kw") @db.Decimal(10, 2)
   currentVoltage  Decimal?           @map("current_voltage") @db.Decimal(10, 2)
   currentAmperage Decimal?           @map("current_amperage") @db.Decimal(10, 2)
+  socPercent         Decimal?           @map("soc_percent") @db.Decimal(5, 2)
   costCents          Int                @default(0) @map("cost_cents")
+  idTag              String?            @map("id_tag")
+  remoteStopPending  Boolean            @default(false) @map("remote_stop_pending")
   idempotencyKey     String?            @map("idempotency_key")
   stopIdempotencyKey String?            @map("stop_idempotency_key")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -375,12 +388,15 @@ model ChargingSession {
   payment            Payment?
   receipt            Receipt?
   walletTransactions WalletTransaction[]
+  ocppTxs            OcppTransaction[]
+  ocppAuths          OcppAuthorization[]
 
   @@unique([userId, idempotencyKey])
   @@unique([userId, stopIdempotencyKey])
   @@index([userId, status])
   @@index([connectorId, status])
   @@index([status, startedAt])
+  @@index([idTag])
   @@map("charging_sessions")
 }
 
@@ -393,6 +409,7 @@ model MeterValue {
   voltage     Decimal? @db.Decimal(10, 2)
   current     Decimal? @db.Decimal(10, 2)
   temperature Decimal? @db.Decimal(5, 2)
+  socPercent  Decimal? @map("soc_percent") @db.Decimal(5, 2)
 
   session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
@@ -559,4 +576,81 @@ model IdempotencyRecord {
 
   @@unique([userId, operation, key])
   @@map("idempotency_records")
+}
+
+enum ChargerCredentialStatus {
+  ACTIVE
+  REVOKED
+}
+
+model ChargerCredential {
+  id             String                  @id @default(cuid())
+  chargerId      String                  @map("charger_id")
+  credentialHash String                  @map("credential_hash")
+  status         ChargerCredentialStatus @default(ACTIVE)
+  lastUsedAt     DateTime?               @map("last_used_at")
+  rotatedAt      DateTime?               @map("rotated_at")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  charger Charger @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+
+  @@index([chargerId, status])
+  @@map("charger_credentials")
+}
+
+model OcppAuthorization {
+  id        String   @id @default(cuid())
+  idTag     String   @unique @map("id_tag")
+  sessionId String   @map("session_id")
+  expiresAt DateTime @map("expires_at")
+  status    String   @default("Accepted")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([expiresAt])
+  @@map("ocpp_authorizations")
+}
+
+model OcppTransaction {
+  id                String    @id @default(cuid())
+  chargerId         String    @map("charger_id")
+  connectorId       String    @map("connector_id")
+  connectorNumber   Int       @map("connector_number")
+  sessionId         String    @map("session_id")
+  ocppTransactionId Int       @map("ocpp_transaction_id")
+  idTag             String    @map("id_tag")
+  meterStartWh      Int       @map("meter_start_wh")
+  meterStopWh       Int?      @map("meter_stop_wh")
+  startedAt         DateTime  @map("started_at")
+  stoppedAt         DateTime? @map("stopped_at")
+  stopReason        String?   @map("stop_reason")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  charger   Charger          @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  connector Connector        @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  session   ChargingSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([chargerId, ocppTransactionId])
+  @@index([sessionId])
+  @@index([connectorId])
+  @@index([idTag])
+  @@map("ocpp_transactions")
+}
+
+model ChargerEvent {
+  id        String   @id @default(cuid())
+  chargerId String   @map("charger_id")
+  type      String
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  charger Charger @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+
+  @@index([chargerId, createdAt])
+  @@index([type, createdAt])
+  @@map("charger_events")
 }

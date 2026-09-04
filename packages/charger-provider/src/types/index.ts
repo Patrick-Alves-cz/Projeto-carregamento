@@ -28,6 +28,7 @@ export interface MeterReading {
   voltage?: number;
   current?: number;
   temperature?: number;
+  socPercent?: number;
 }
 
 export interface ChargerDiagnostics {

@@ -38,6 +38,10 @@ export function useRealtime(onEvent?: (event: { type: string; payload: unknown }
         socket.on("session.failed", forward("session.failed"));
         socket.on("charger.status.changed", forward("charger.status.changed"));
         socket.on("connector.status.changed", forward("connector.status.changed"));
+        socket.on("session.telemetry", forward("session.telemetry"));
+        socket.on("charger.connected", forward("charger.connected"));
+        socket.on("charger.disconnected", forward("charger.disconnected"));
+        socket.on("charger.booted", forward("charger.booted"));
         socket.on("session.event", forward("session.event"));
         socket.on("operations.event", forward("operations.event"));
       } catch {

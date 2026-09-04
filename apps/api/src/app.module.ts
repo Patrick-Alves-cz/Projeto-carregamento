@@ -16,6 +16,7 @@ import { RolesGuard } from "./common/guards/roles.guard";
 import { HealthModule } from "./health/health.module";
 import { InvitationsModule } from "./invitations/invitations.module";
 import { NotificationsModule } from "./notifications/notifications.module";
+import { OcppModule } from "./ocpp/ocpp.module";
 import { OpsModule } from "./ops/ops.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { SessionsModule } from "./sessions/sessions.module";
@@ -31,6 +32,7 @@ import { WalletModule } from "./wallet/wallet.module";
     DatabaseModule,
     CommonModule,
     ChargingModule,
+    OcppModule,
     InvitationsModule,
     NotificationsModule,
     OpsModule,

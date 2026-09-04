@@ -52,6 +52,10 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async ingestMeterValue(event: MeterValueCallbackEvent): Promise<void> {
+    await this.handleMeterValue(event);
+  }
+
   onModuleDestroy(): void {
     this.unsubMeter?.();
     this.unsubStatus?.();
@@ -88,6 +92,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
             currentVoltage: event.reading.voltage,
             currentAmperage: event.reading.current,
             costCents,
+            socPercent: event.reading.socPercent,
           },
         });
 
@@ -100,6 +105,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
             voltage: event.reading.voltage,
             current: event.reading.current,
             temperature: event.reading.temperature,
+            socPercent: event.reading.socPercent,
           },
         });
 
@@ -132,6 +138,25 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           dedupeKey: `low-balance-${session.id}`,
         });
       }
+
+      await this.events.publish({
+        type: "session.telemetry",
+        entityType: "session",
+        entityId: session.id,
+        timestamp: event.reading.timestamp,
+        payload: {
+          sessionId: session.id,
+          status: session.status,
+          userId: session.userId,
+          connectorId: session.connectorId,
+          companyId: session.connector.charger.station.companyId,
+          energyWh: Math.round(event.reading.energyKwh * 1000),
+          powerW: Math.round(event.reading.powerKw * 1000),
+          costCents,
+          socPercent: event.reading.socPercent,
+          timestamp: event.reading.timestamp.toISOString(),
+        },
+      });
 
       await this.events.publish({
         type: "meter.value",
@@ -292,13 +317,13 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     });
     if (!session || !isSessionActive(session.status)) return;
 
-    const mock = this.chargerProviderService.mockProvider;
-    if (mock) {
-      try {
-        await mock.stopCharging(session.connector.chargerId, session.connector.number);
-      } catch {
-        // Provider may already be faulted/offline
-      }
+    try {
+      await this.chargerProviderService.stopCharging(
+        session.connector.chargerId,
+        session.connector.number,
+      );
+    } catch {
+      // Provider may already be faulted/offline or waiting for StopTransaction
     }
 
     await tx.chargingSession.update({

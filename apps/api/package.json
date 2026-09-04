@@ -14,6 +14,7 @@
     "@evcharge/charger-provider": "workspace:*",
     "@evcharge/database": "workspace:*",
     "@evcharge/domain": "workspace:*",
+    "@evcharge/ocpp": "workspace:*",
     "@evcharge/shared": "workspace:*",
     "@nestjs/common": "^11.1.3",
     "@nestjs/core": "^11.1.3",
@@ -31,7 +32,8 @@
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.3",
@@ -43,6 +45,7 @@
     "@types/node": "^22.15.29",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.3",
+    "@types/ws": "^8.18.1",
     "dotenv": "^16.5.0",
     "socket.io-client": "^4.8.1",
     "supertest": "^7.1.1",

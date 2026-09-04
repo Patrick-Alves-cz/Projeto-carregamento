@@ -117,6 +117,9 @@ importers:
       '@evcharge/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@evcharge/ocpp':
+        specifier: workspace:*
+        version: link:../../packages/ocpp
       '@evcharge/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -153,6 +156,9 @@ importers:
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7
+      dotenv:
+        specifier: ^16.5.0
+        version: 16.6.1
       passport:
         specifier: ^0.7.0
         version: 0.7.0
@@ -168,6 +174,9 @@ importers:
       socket.io:
         specifier: ^4.8.1
         version: 4.8.3
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.3
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.3
@@ -196,9 +205,9 @@ importers:
       '@types/supertest':
         specifier: ^6.0.3
         version: 6.0.3
-      dotenv:
-        specifier: ^16.5.0
-        version: 16.6.1
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       socket.io-client:
         specifier: ^4.8.1
         version: 4.8.3
@@ -217,16 +226,25 @@ importers:
       '@evcharge/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@evcharge/ocpp':
+        specifier: workspace:*
+        version: link:../../packages/ocpp
       '@prisma/client':
         specifier: ^6.9.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       dotenv:
         specifier: ^16.5.0
         version: 16.6.1
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.3
     devDependencies:
       '@types/node':
         specifier: ^22.15.29
         version: 22.20.1
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.19.4
         version: 4.23.13
@@ -342,6 +360,19 @@ importers:
         version: 4.23.13
 
   packages/domain:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.29
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.4
+        version: 4.23.13
+
+  packages/ocpp:
+    dependencies:
+      zod:
+        specifier: ^3.25.56
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.15.29

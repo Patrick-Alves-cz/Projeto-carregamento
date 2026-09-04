@@ -13,8 +13,9 @@ export interface ChargerProvider {
     chargerId: string,
     connectorId: number,
     sessionId: string,
-  ): Promise<void>;
-  stopCharging(chargerId: string, connectorId: number): Promise<void>;
+    options?: { idTag?: string },
+  ): Promise<void | { deferred?: boolean }>;
+  stopCharging(chargerId: string, connectorId: number): Promise<void | { deferred?: boolean }>;
   pauseCharging(chargerId: string, connectorId: number): Promise<void>;
   resumeCharging(chargerId: string, connectorId: number): Promise<void>;
   getMeterValues(chargerId: string, connectorId: number): Promise<MeterReading>;

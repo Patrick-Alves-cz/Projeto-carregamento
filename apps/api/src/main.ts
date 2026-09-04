@@ -51,10 +51,11 @@ async function bootstrap() {
         "Tariffs: CRUD /tariffs. Session start snapshots the effective tariff.",
         "Invitations: POST /invitations (ADMIN+), POST /invitations/:token/accept, POST /invitations/:id/revoke.",
         "Password recovery: POST /auth/forgot-password, POST /auth/reset-password.",
-        "Receipts: GET /sessions/:id/receipt after completion.",
+        "OCPP 1.6J gateway: wss://host/ocpp/:identity (subprotocol ocpp1.6).",
+        "Admin OCPP: GET /chargers/:id/ocpp, POST /chargers/:id/ocpp/command.",
       ].join("\n"),
     )
-    .setVersion("1.3.0")
+    .setVersion("1.4.0")
     .addBearerAuth()
     .addCookieAuth("evcharge_access")
     .build();

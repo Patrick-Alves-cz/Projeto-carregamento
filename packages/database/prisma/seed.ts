@@ -28,6 +28,10 @@ async function main() {
   console.log("Seeding demo data...");
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 12);
 
+  await prisma.ocppAuthorization.deleteMany({});
+  await prisma.ocppTransaction.deleteMany({});
+  await prisma.chargerEvent.deleteMany({});
+  await prisma.chargerCredential.deleteMany({});
   await prisma.inAppNotification.deleteMany({
     where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });
@@ -360,6 +364,7 @@ async function main() {
         data: {
           stationId: station.id,
           serialNumber: c.serial,
+          identity: c.serial,
           model: c.model,
           maxPowerKw: c.power,
           status: c.status,
@@ -380,6 +385,53 @@ async function main() {
         });
       }
     }
+  }
+
+  const mtStation = await prisma.station.findFirst({
+    where: { companyId: companyMt.id },
+    orderBy: { name: "asc" },
+  });
+  if (mtStation) {
+    const ocppIdentity = "EVSE-CUIABA-001";
+    const ocppCharger = await prisma.charger.create({
+      data: {
+        stationId: mtStation.id,
+        identity: ocppIdentity,
+        serialNumber: ocppIdentity,
+        model: "OCPP Simulator 1.6",
+        vendor: "EVCharge",
+        protocol: "ocpp1.6",
+        maxPowerKw: 60,
+        status: ChargerStatus.OFFLINE,
+        providerId: "ocpp16",
+      },
+    });
+    await prisma.connector.createMany({
+      data: [
+        {
+          chargerId: ocppCharger.id,
+          number: 1,
+          type: ConnectorType.CCS2,
+          maxPowerKw: 60,
+          status: ConnectorStatus.UNAVAILABLE,
+        },
+        {
+          chargerId: ocppCharger.id,
+          number: 2,
+          type: ConnectorType.TYPE2,
+          maxPowerKw: 22,
+          status: ConnectorStatus.UNAVAILABLE,
+        },
+      ],
+    });
+    await prisma.chargerCredential.create({
+      data: {
+        chargerId: ocppCharger.id,
+        credentialHash: await bcrypt.hash("DemoCharger@12345", 12),
+      },
+    });
+    chargerCount += 1;
+    connectorCount += 2;
   }
 
   await prisma.tariff.createMany({
@@ -433,7 +485,7 @@ async function main() {
   console.log(`  Companies: ${COMPANY_SLUGS.join(", ")}`);
   console.log(`  Stations: ${stationsData.length}, Chargers: ${chargerCount}, Connectors: ${connectorCount}`);
   console.log(`  Demo wallets: R$ 100,00 for each driver`);
-  console.log(`  Tariffs: R$ 1,89/kWh (SP/MT), R$ 1,75/kWh (RJ)`);
+  console.log(`  OCPP charger: EVSE-CUIABA-001 (secret DemoCharger@12345, starts OFFLINE)`);
   console.log(`  Super admin id: ${superAdmin.id}`);
   void operatorSp;
   void operatorRj;

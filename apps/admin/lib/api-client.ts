@@ -25,12 +25,20 @@ export interface Charger {
   id: string;
   stationId: string;
   serialNumber: string;
+  identity?: string;
   model: string | null;
+  vendor?: string | null;
+  firmwareVersion?: string | null;
+  protocol?: string | null;
+  protocolLabel?: string;
   maxPowerKw: number;
   status: string;
   lastSeenAt?: string | null;
   providerId: string | null;
+  ocppOnline?: boolean;
+  ocppConnectedAt?: string | null;
   connectors: Connector[];
+  station?: { id: string; name: string; companyId: string };
 }
 
 export interface Station {
@@ -250,6 +258,51 @@ export async function listSessions(params?: {
 
 export async function listActiveSessions() {
   return apiFetch<ChargingSession[]>("/sessions/active/live");
+}
+
+export async function listChargers(stationId?: string) {
+  const query = stationId ? `?stationId=${stationId}` : "";
+  return apiFetch<Charger[]>(`/chargers${query}`);
+}
+
+export async function getChargerOcpp(id: string) {
+  return apiFetch<OcppChargerDetail>(`/chargers/${id}/ocpp`);
+}
+
+export interface ChargerEvent {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface OcppChargerDetail extends Charger {
+  events: ChargerEvent[];
+  currentTransaction: {
+    id: string;
+    ocppTransactionId: number;
+    sessionId: string;
+    connectorNumber: number;
+    startedAt: string;
+    session?: { id: string; status: string; energyKwh: number; costCents: number };
+  } | null;
+}
+
+export async function sendOcppCommand(
+  chargerId: string,
+  body: {
+    action: "REMOTE_START" | "REMOTE_STOP" | "RESET" | "CHANGE_AVAILABILITY";
+    connectorNumber?: number;
+    idTag?: string;
+    availability?: "Inoperative" | "Operative";
+    resetType?: "Hard" | "Soft";
+    confirm: true;
+  },
+) {
+  return apiFetch<{ chargerId: string; action: string; accepted: boolean }>(
+    `/chargers/${chargerId}/ocpp/command`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
 }
 
 export async function chargerDemoAction(

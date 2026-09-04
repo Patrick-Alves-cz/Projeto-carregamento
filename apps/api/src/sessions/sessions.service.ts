@@ -4,6 +4,7 @@ import {
   assertConnectorStatusTransition,
   assertSessionStatusTransition,
   assertVehicleConnectorCompatibility,
+  calculateCostCents,
   ConflictError,
   ConnectorUnavailableError,
   ForbiddenError,
@@ -58,6 +59,15 @@ const ACTIVE_STATUSES: SessionStatus[] = [
 ];
 
 type SessionWithInclude = Prisma.ChargingSessionGetPayload<{ include: typeof sessionInclude }>;
+
+function makeIdTag(sessionId: string): string {
+  const compact = sessionId.replace(/[^a-zA-Z0-9]/g, "");
+  return `S${compact.slice(-19)}`.slice(0, 20);
+}
+
+function isDeferred(outcome: unknown): outcome is { deferred: true } {
+  return Boolean(outcome && typeof outcome === "object" && "deferred" in outcome && (outcome as { deferred?: boolean }).deferred);
+}
 
 @Injectable()
 export class SessionsService {
@@ -168,11 +178,21 @@ export class SessionsService {
           },
         });
 
+        const idTag = makeIdTag(session.id);
         assertSessionStatusTransition(session.status, SessionStatus.PREPARING);
         await tx.chargingSession.update({
           where: { id: session.id },
-          data: { status: SessionStatus.PREPARING },
+          data: { status: SessionStatus.PREPARING, idTag },
         });
+        if (this.chargerProviderService.usesOcpp(charger.providerId)) {
+          await tx.ocppAuthorization.create({
+            data: {
+              idTag,
+              sessionId: session.id,
+              expiresAt: new Date(Date.now() + 15 * 60_000),
+            },
+          });
+        }
 
         if (charger.status === ChargerStatus.AVAILABLE) {
           assertChargerStatusTransition(charger.status, ChargerStatus.PREPARING);
@@ -186,15 +206,45 @@ export class SessionsService {
       });
 
       sessionId = created.id;
+      const idTag = created.idTag ?? makeIdTag(created.id);
 
-      await this.chargerProviderService.provider.startCharging(
+      const outcome = await this.chargerProviderService.startCharging(
         charger.id,
         connectorSnapshot.number,
         created.id,
+        { idTag },
       );
+
+      const afterCommand = await this.prisma.chargingSession.findUniqueOrThrow({
+        where: { id: created.id },
+        include: sessionInclude,
+      });
+
+      if (isDeferred(outcome)) {
+        await this.events.publish({
+          type: "session.remote_start_accepted",
+          entityType: "session",
+          entityId: afterCommand.id,
+          timestamp: new Date(),
+          payload: {
+            sessionId: afterCommand.id,
+            status: afterCommand.status,
+            userId: user.id,
+            connectorId: input.connectorId,
+            companyId,
+          },
+        });
+        return this.enrichSession(afterCommand);
+      }
 
       const activeSession = await this.prisma.$transaction(async (tx) => {
         const current = await tx.chargingSession.findUniqueOrThrow({ where: { id: created.id } });
+        if (current.status === SessionStatus.ACTIVE) {
+          return tx.chargingSession.findUniqueOrThrow({
+            where: { id: created.id },
+            include: sessionInclude,
+          });
+        }
         assertSessionStatusTransition(current.status, SessionStatus.ACTIVE);
 
         const updated = await tx.chargingSession.update({
@@ -328,10 +378,32 @@ export class SessionsService {
     const stopReason =
       user.role === UserRole.DRIVER ? SessionStopReason.USER_STOP : SessionStopReason.ADMIN;
 
-    await this.chargerProviderService.provider.stopCharging(
+    const outcome = await this.chargerProviderService.stopCharging(
       session.connector.chargerId,
       session.connector.number,
     );
+
+    if (isDeferred(outcome)) {
+      const pending = await this.prisma.chargingSession.update({
+        where: { id: sessionId },
+        data: { remoteStopPending: true, stopIdempotencyKey: idempotencyKey },
+        include: sessionInclude,
+      });
+      await this.events.publish({
+        type: "session.remote_stop_requested",
+        entityType: "session",
+        entityId: sessionId,
+        timestamp: new Date(),
+        payload: {
+          sessionId,
+          status: pending.status,
+          userId: session.userId,
+          connectorId: session.connectorId,
+          companyId: session.connector.charger.station.companyId,
+        },
+      });
+      return this.enrichSession(pending);
+    }
 
     const completed = await this.finalizeSessionRecord(
       session,
@@ -381,7 +453,7 @@ export class SessionsService {
     }
     assertSessionStatusTransition(session.status, "PAUSED");
 
-    await this.chargerProviderService.provider.pauseCharging(
+    await this.chargerProviderService.pauseCharging(
       session.connector.chargerId,
       session.connector.number,
     );
@@ -436,7 +508,7 @@ export class SessionsService {
     }
     assertSessionStatusTransition("PAUSED", "ACTIVE");
 
-    await this.chargerProviderService.provider.resumeCharging(
+    await this.chargerProviderService.resumeCharging(
       session.connector.chargerId,
       session.connector.number,
     );
@@ -659,6 +731,202 @@ export class SessionsService {
     if (this.tenantAccess.isSuperAdmin(user)) return;
 
     this.tenantAccess.assertCompanyAccess(user, session.connector.charger.station.companyId);
+  }
+
+  async confirmStartFromEquipment(sessionId: string, timestamp: Date) {
+    const session = await this.prisma.chargingSession.findUnique({
+      where: { id: sessionId },
+      include: sessionInclude,
+    });
+    if (!session) throw new NotFoundError("ChargingSession", sessionId);
+    if (session.status === SessionStatus.ACTIVE) {
+      return this.enrichSession(session);
+    }
+
+    const started = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.chargingSession.findUniqueOrThrow({ where: { id: sessionId } });
+      if (current.status === SessionStatus.ACTIVE) {
+        return tx.chargingSession.findUniqueOrThrow({ where: { id: sessionId }, include: sessionInclude });
+      }
+      assertSessionStatusTransition(current.status, SessionStatus.ACTIVE);
+      const updated = await tx.chargingSession.update({
+        where: { id: sessionId },
+        data: { status: SessionStatus.ACTIVE, startedAt: timestamp },
+        include: sessionInclude,
+      });
+      const connector = await tx.connector.findUniqueOrThrow({ where: { id: session.connectorId } });
+      if (connector.status !== ConnectorStatus.CHARGING) {
+        try {
+          assertConnectorStatusTransition(connector.status, ConnectorStatus.CHARGING);
+        } catch {
+          // equipment confirmation is the source of truth
+        }
+        await tx.connector.update({
+          where: { id: session.connectorId },
+          data: { status: ConnectorStatus.CHARGING },
+        });
+      }
+      const chargerRow = await tx.charger.findUniqueOrThrow({ where: { id: session.connector.chargerId } });
+      if (chargerRow.status !== ChargerStatus.CHARGING && chargerRow.status !== ChargerStatus.OFFLINE) {
+        try {
+          assertChargerStatusTransition(chargerRow.status, ChargerStatus.CHARGING);
+        } catch {
+          // keep charger status if transition is illegal
+        }
+        await tx.charger.update({
+          where: { id: session.connector.chargerId },
+          data: { status: ChargerStatus.CHARGING, lastSeenAt: timestamp },
+        });
+      }
+      return updated;
+    });
+
+    const snapshot = readTariffSnapshot(started.tariffSnapshot);
+    if (snapshot && snapshot.connectionFeeCents > 0 && started.costCents === 0) {
+      await this.prisma.$transaction(async (tx) => {
+        await this.walletService.debitForSession(tx, {
+          userId: started.userId,
+          sessionId: started.id,
+          amountCents: snapshot.connectionFeeCents,
+          description: "Taxa de conexão",
+          idempotencyKey: `connection-${started.id}`,
+        });
+        await tx.chargingSession.update({
+          where: { id: started.id },
+          data: { costCents: { increment: snapshot.connectionFeeCents } },
+        });
+      });
+    }
+
+    await this.events.publish({
+      type: "session.started",
+      entityType: "session",
+      entityId: started.id,
+      timestamp,
+      payload: {
+        sessionId: started.id,
+        status: SessionStatus.ACTIVE,
+        userId: started.userId,
+        connectorId: started.connectorId,
+        companyId: started.connector.charger.station.companyId,
+      },
+    });
+
+    await this.notifications.notify({
+      userId: started.userId,
+      type: NotificationType.SESSION_STARTED,
+      title: "Sessão iniciada",
+      body: "Sua recarga foi iniciada.",
+      payload: { sessionId: started.id },
+      dedupeKey: `session-started-${started.id}`,
+    });
+
+    return this.enrichSession(
+      await this.prisma.chargingSession.findUniqueOrThrow({
+        where: { id: started.id },
+        include: sessionInclude,
+      }),
+    );
+  }
+
+  async confirmStopFromEquipment(
+    sessionId: string,
+    input: { energyKwh: number; timestamp: Date; reason?: string },
+  ) {
+    const session = await this.prisma.chargingSession.findUnique({
+      where: { id: sessionId },
+      include: sessionInclude,
+    });
+    if (!session) throw new NotFoundError("ChargingSession", sessionId);
+
+    if (
+      session.status === SessionStatus.COMPLETED ||
+      session.status === SessionStatus.FAILED ||
+      session.status === SessionStatus.CANCELLED
+    ) {
+      return this.enrichSession(session);
+    }
+
+    const energyKwh = Math.max(Number(session.energyKwh), input.energyKwh);
+    const snapshot = readTariffSnapshot(session.tariffSnapshot);
+    const energyCost = calculateCostCents(energyKwh, snapshot?.pricePerKwhCents ?? 0);
+    const costCents = Math.max(
+      session.costCents,
+      energyCost + (snapshot?.connectionFeeCents ?? 0),
+    );
+    const deltaCents = costCents - session.costCents;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.chargingSession.update({
+        where: { id: sessionId },
+        data: { energyKwh, costCents, remoteStopPending: false },
+      });
+      if (deltaCents > 0) {
+        await this.walletService.debitForSession(tx, {
+          userId: session.userId,
+          sessionId,
+          amountCents: deltaCents,
+          description: "Ajuste final da recarga",
+          idempotencyKey: `stop-adjust-${sessionId}-${costCents}`,
+        });
+      }
+    });
+
+    const stopReason =
+      input.reason === "Remote" || input.reason === "Local"
+        ? SessionStopReason.USER_STOP
+        : session.stopReason ?? SessionStopReason.USER_STOP;
+
+    const completed = await this.finalizeSessionRecord(
+      await this.prisma.chargingSession.findUniqueOrThrow({
+        where: { id: sessionId },
+        include: sessionInclude,
+      }),
+      SessionStatus.COMPLETED,
+      stopReason,
+    );
+
+    await this.events.publish({
+      type: "session.stopped",
+      entityType: "session",
+      entityId: sessionId,
+      timestamp: input.timestamp,
+      payload: {
+        sessionId,
+        status: SessionStatus.COMPLETED,
+        userId: session.userId,
+        connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
+        energyKwh: Number(completed.energyKwh),
+        costCents: completed.costCents,
+      },
+    });
+
+    await this.events.publish({
+      type: "session.completed",
+      entityType: "session",
+      entityId: sessionId,
+      timestamp: input.timestamp,
+      payload: {
+        sessionId,
+        status: SessionStatus.COMPLETED,
+        userId: session.userId,
+        connectorId: session.connectorId,
+        companyId: session.connector.charger.station.companyId,
+        energyKwh: Number(completed.energyKwh),
+        costCents: completed.costCents,
+      },
+    });
+
+    await this.notifications.notify({
+      userId: session.userId,
+      type: NotificationType.SESSION_COMPLETED,
+      title: "Recarga finalizada",
+      body: "Sua recarga foi encerrada. O recibo já está disponível.",
+      payload: { sessionId },
+      dedupeKey: `session-completed-${sessionId}`,
+    });
+
+    return completed;
   }
 
   private async finalizeSessionRecord(

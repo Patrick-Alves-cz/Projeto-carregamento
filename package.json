@@ -14,7 +14,8 @@
     "db:push": "pnpm --filter @evcharge/database push",
     "db:studio": "pnpm --filter @evcharge/database studio",
     "db:seed": "pnpm --filter @evcharge/database seed",
-    "simulator": "pnpm --filter @evcharge/charger-simulator dev"
+    "simulator": "pnpm --filter @evcharge/charger-simulator dev -- --mode mock",
+    "charger:simulator": "pnpm --filter @evcharge/charger-simulator dev"
   },
   "devDependencies": {
     "@eslint/js": "^9.28.0",

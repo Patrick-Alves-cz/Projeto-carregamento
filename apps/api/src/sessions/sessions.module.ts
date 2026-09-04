@@ -12,6 +12,6 @@ import { OrphanSessionReaper } from "./orphan-session.reaper";
   imports: [ChargingModule, WalletModule, TariffsModule, NotificationsModule],
   controllers: [SessionsController],
   providers: [SessionsService, SessionMeterProcessor, OrphanSessionReaper],
-  exports: [SessionsService],
+  exports: [SessionsService, SessionMeterProcessor],
 })
 export class SessionsModule {}

@@ -47,6 +47,9 @@ export class ChargersAdminController {
     });
     if (!charger) throw new NotFoundError("Charger", chargerId);
     this.tenantAccess.assertCompanyAccess(user, charger.station.companyId);
+    if (this.chargerProviderService.usesOcpp(charger.providerId)) {
+      throw new ForbiddenError("Ações demo não se aplicam a carregadores OCPP");
+    }
 
     const mock = this.chargerProviderService.mockProvider;
     if (!mock) throw new ForbiddenError("Demo actions only available with mock provider");

@@ -5,8 +5,20 @@ export type DomainEventType =
   | "session.resumed"
   | "session.completed"
   | "session.failed"
+  | "session.remote_start_requested"
+  | "session.remote_start_accepted"
+  | "session.remote_start_rejected"
+  | "session.remote_stop_requested"
+  | "session.meter_updated"
+  | "session.stopped"
+  | "session.telemetry"
   | "meter.value"
   | "charger.status.changed"
+  | "charger.connected"
+  | "charger.disconnected"
+  | "charger.booted"
+  | "charger.heartbeat"
+  | "charger.faulted"
   | "connector.status.changed";
 
 export interface DomainEvent<TPayload = Record<string, unknown>> {
