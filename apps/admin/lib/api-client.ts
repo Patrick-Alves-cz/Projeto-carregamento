@@ -310,6 +310,21 @@ export async function sendOcppCommand(
   );
 }
 
+export async function rotateOcppCredential(chargerId: string) {
+  return apiFetch<{
+    chargerId: string;
+    identity: string;
+    username: string;
+    secret: string;
+    protocol: string;
+    ocppUrl: string;
+    note: string;
+  }>(`/chargers/${chargerId}/ocpp/credential`, {
+    method: "POST",
+    body: JSON.stringify({ confirm: true }),
+  });
+}
+
 export async function chargerDemoAction(
   chargerId: string,
   action: "offline" | "maintenance" | "fault" | "restore" | "disable" | "enable" | "simulate_fault",

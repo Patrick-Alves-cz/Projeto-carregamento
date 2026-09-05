@@ -13,6 +13,7 @@ import { UserRole, UserStatus } from "@prisma/client";
 import { PrismaService } from "../common/database/database.module";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import type { JwtPayload } from "../common/types/auth.types";
+import { getAllowedCorsOrigins } from "../common/config/cors-origins";
 import { getRequiredJwtAccessSecret } from "../common/config/jwt-secrets";
 
 type RealtimeEnvelope = {
@@ -25,12 +26,7 @@ type RealtimeEnvelope = {
 
 @WebSocketGateway({
   cors: {
-    origin: [
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-      "http://localhost:8081",
-      "http://127.0.0.1:8081",
-    ],
+    origin: getAllowedCorsOrigins(),
     credentials: true,
   },
   namespace: "/realtime",

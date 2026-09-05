@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Logger, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { UserRole } from "@prisma/client";
 import { z } from "zod";
@@ -14,7 +14,12 @@ import { ChargerCommandType } from "@prisma/client";
 import { OcppConnectionManager } from "./ocpp-connection.manager";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { AuditLogger } from "../common/logging/audit-logger";
-import { Logger } from "@nestjs/common";
+import { OcppAuthService } from "./ocpp-auth.service";
+
+const credentialSchema = z.object({
+  confirm: z.literal(true),
+  secret: z.string().min(12).max(128).optional(),
+});
 
 const commandSchema = z.object({
   action: z.enum(["REMOTE_START", "REMOTE_STOP", "RESET", "CHANGE_AVAILABILITY"]),
@@ -37,6 +42,7 @@ export class OcppOpsController {
     private readonly commandLog: ChargerCommandsService,
     private readonly connections: OcppConnectionManager,
     private readonly events: ChargingEventsService,
+    private readonly ocppAuth: OcppAuthService,
   ) {}
 
   @Get(":id/ocpp")
@@ -129,6 +135,39 @@ export class OcppOpsController {
       });
     }
     return { chargerId: id, action: input.action, accepted, commandId: result.commandId, status: result.status };
+  }
+
+  @Post(":id/ocpp/credential")
+  @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({
+    summary: "Rotate OCPP charger credential",
+    description:
+      "Revokes the active equipment secret and returns a new plaintext secret once. It is never stored in clear text.",
+  })
+  async rotateCredential(
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(credentialSchema)) body: unknown,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    const input = body as z.infer<typeof credentialSchema>;
+    const charger = await this.loadCharger(id, user);
+    const secret = await this.ocppAuth.rotateCredential(id, input.secret);
+    const publicBase = (process.env.OCPP_PUBLIC_URL ?? "ws://localhost:3001/ocpp").replace(/\/$/, "");
+    this.audit.info("ocpp.credential.rotated", {
+      chargerId: id,
+      userId: user.id,
+      companyId: charger.station.companyId,
+      identity: charger.identity,
+    });
+    return {
+      chargerId: charger.id,
+      identity: charger.identity,
+      username: charger.identity,
+      secret,
+      protocol: "OCPP 1.6J",
+      ocppUrl: `${publicBase}/${charger.identity}`,
+      note: "Guarde o secret agora. Ele não será exibido novamente.",
+    };
   }
 
   private async loadCharger(id: string, user: AuthenticatedUser) {

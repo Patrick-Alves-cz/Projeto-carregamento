@@ -194,21 +194,28 @@ describeIfDb("Phase 2.2 discovery", () => {
   });
 
   it("rejects starting on an occupied connector", async () => {
+    let mutated = false;
     let occupied = await prisma.connector.findFirst({
       where: {
         type: "CCS2",
         status: { in: ["CHARGING", "PREPARING", "SUSPENDED"] },
+        charger: { station: { status: "ACTIVE" } },
       },
     });
     if (!occupied) {
       occupied = await prisma.connector.findFirst({
-        where: { type: "CCS2", status: "AVAILABLE" },
+        where: {
+          type: "CCS2",
+          status: "AVAILABLE",
+          charger: { station: { status: "ACTIVE" } },
+        },
       });
       assert.ok(occupied);
       occupied = await prisma.connector.update({
         where: { id: occupied.id },
         data: { status: "CHARGING" },
       });
+      mutated = true;
     }
 
     const res = await request(app.getHttpServer())
@@ -217,6 +224,12 @@ describeIfDb("Phase 2.2 discovery", () => {
       .send({ connectorId: occupied.id, vehicleId: vehicleCcs2Id })
       .expect(409);
     assert.equal(res.body.code, "CONNECTOR_UNAVAILABLE");
+    if (mutated && occupied) {
+      await prisma.connector.update({
+        where: { id: occupied.id },
+        data: { status: "AVAILABLE" },
+      });
+    }
   });
 
   it("keeps company isolation on admin station create", async () => {

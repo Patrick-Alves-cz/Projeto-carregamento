@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 
-const isProd = process.env.NODE_ENV === "production";
+function cookieSecure(): boolean {
+  if (process.env.COOKIE_SECURE === "true") return true;
+  if (process.env.COOKIE_SECURE === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
 
 const base = {
   httpOnly: true,
-  secure: isProd,
+  secure: cookieSecure(),
   sameSite: "lax" as const,
   path: "/",
+  ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
 };
 
 export function applyAuthCookies(
@@ -29,5 +34,9 @@ export function clearAuthCookies(response: NextResponse) {
 }
 
 export function apiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api";
+  return (
+    process.env.API_INTERNAL_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    "http://localhost:3001/api"
+  );
 }

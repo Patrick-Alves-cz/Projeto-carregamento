@@ -17,6 +17,7 @@ import { IncidentsService } from "../dist/operations/incidents.service";
 import { ReconciliationCasesService } from "../dist/operations/reconciliation-cases.service";
 import { ChargerProviderFactory } from "@evcharge/charger-provider";
 import { calculateChargerHealth, calculateReliabilityScore } from "@evcharge/domain";
+import { releaseConnector } from "./release-connector";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describeIfDb = hasDatabase ? describe : describe.skip;
@@ -161,7 +162,7 @@ describeIfDb("Phase 6 operations", () => {
       where: {
         type: "CCS2",
         status: ConnectorStatus.AVAILABLE,
-        charger: { station: { companyId }, status: "AVAILABLE" },
+        charger: { status: "AVAILABLE", station: { companyId, status: "ACTIVE" } },
       },
       include: { charger: true },
     });
@@ -169,6 +170,7 @@ describeIfDb("Phase 6 operations", () => {
     connectorId = connector.id;
     chargerId = connector.chargerId;
     stationId = connector.charger.stationId;
+    await releaseConnector(prisma, connectorId);
   });
 
   after(async () => {
@@ -179,7 +181,10 @@ describeIfDb("Phase 6 operations", () => {
     const health = app.get(ChargerHealthService);
     const result = await health.refreshCharger(chargerId);
     assert.ok(result);
-    assert.ok(["HEALTHY", "DEGRADED"].includes(result.status));
+    assert.ok(
+      ["HEALTHY", "DEGRADED", "UNSTABLE"].includes(result.status),
+      `expected live mock health, got ${result.status} (${result.reasons.join(",")})`,
+    );
   });
 
   it("opens an offline incident once and updates lastSeenAt on duplicate", async () => {

@@ -13,6 +13,7 @@ config({ path: resolve(__dirname, "../../../packages/database/.env"), override: 
 import { AppModule } from "../dist/app.module";
 import { PrismaService } from "../dist/common/database/database.module";
 import { ChargerProviderFactory } from "@evcharge/charger-provider";
+import { releaseConnector } from "./release-connector";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describeIfDb = hasDatabase ? describe : describe.skip;
@@ -78,6 +79,7 @@ describeIfDb("Phase 3 MVP closure", () => {
     });
     assert.ok(connector);
     connectorId = connector.id;
+    await releaseConnector(prisma, connectorId);
   });
 
   after(async () => {
@@ -129,14 +131,18 @@ describeIfDb("Phase 3 MVP closure", () => {
 
   it("blocks start below minimum balance", async () => {
     const wallet = await prisma.wallet.findUniqueOrThrow({ where: { userId: driverUserId } });
+    const previous = wallet.balanceCents;
     await prisma.wallet.update({ where: { id: wallet.id }, data: { balanceCents: 200 } });
-    const res = await request(app.getHttpServer())
-      .post("/api/sessions/start")
-      .set("Authorization", `Bearer ${driverToken}`)
-      .send({ connectorId, vehicleId, idempotencyKey: `minbal-${Date.now()}` })
-      .expect(402);
-    assert.match(String(res.body.message), /Adicione saldo/i);
-    await prisma.wallet.update({ where: { id: wallet.id }, data: { balanceCents: 10000 } });
+    try {
+      const res = await request(app.getHttpServer())
+        .post("/api/sessions/start")
+        .set("Authorization", `Bearer ${driverToken}`)
+        .send({ connectorId, vehicleId, idempotencyKey: `minbal-${Date.now()}` })
+        .expect(402);
+      assert.match(String(res.body.message), /Adicione saldo/i);
+    } finally {
+      await prisma.wallet.update({ where: { id: wallet.id }, data: { balanceCents: Math.max(previous, 10000) } });
+    }
   });
 
   it("tariff CRUD is company-scoped and snapshot stays frozen", async () => {

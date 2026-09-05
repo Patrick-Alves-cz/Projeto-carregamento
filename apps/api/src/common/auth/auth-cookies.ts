@@ -1,13 +1,18 @@
 import { Response } from "express";
 import { parseDurationToMs } from "../utils/token.util";
 
-const isProd = process.env.NODE_ENV === "production";
+function cookieSecure(): boolean {
+  if (process.env.COOKIE_SECURE === "true") return true;
+  if (process.env.COOKIE_SECURE === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
 
 const baseCookie = {
   httpOnly: true,
-  secure: isProd,
+  secure: cookieSecure(),
   sameSite: "lax" as const,
   path: "/",
+  ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
 };
 
 export function setAuthCookies(

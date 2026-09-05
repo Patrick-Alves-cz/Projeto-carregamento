@@ -3,6 +3,7 @@ import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PaymentStatus } from "@prisma/client";
 import { webhookPaymentSchema } from "@evcharge/shared";
 import { AsaasPaymentProvider } from "@evcharge/payment-provider";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../common/decorators/auth.decorators";
 import { PaymentsService } from "./payments.service";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -13,6 +14,7 @@ export class PaymentWebhooksController {
   constructor(private readonly payments: PaymentsService) {}
 
   @Public()
+  @SkipThrottle()
   @Post(":provider")
   @ApiOperation({ summary: "Payment provider webhook. Signature validated when PAYMENT_WEBHOOK_SECRET is set." })
   handle(

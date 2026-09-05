@@ -1,6 +1,37 @@
 # EV Charge Platform
 
-Plataforma de gerenciamento e recarga de veículos elétricos.
+Plataforma de recarga de veículos elétricos: motorista, operação, billing e **OCPP 1.6J** para carregadores físicos.
+
+## Estado atual do projeto
+
+**BETA FUNCIONAL**
+
+- Autenticação JWT + refresh, RBAC, multi-tenant
+- Driver (Expo) e Admin (Next.js)
+- Estações, carregadores, conectores, tarifas, sessões
+- `MockChargerProvider` (padrão) e `OcppChargerProvider` (OCPP 1.6J)
+- Simulador OCPP, telemetria, health, incidentes, manutenção
+- Reservas, waitlist, favoritos
+- Carteira, PIX, cartão tokenizado, hold, capture, refund, webhooks
+- Asaas em **SANDBOX** (não use produção até fornecer chave real)
+- Reconciliação financeira e recibos
+- Pronto para publicar o beta na internet (VPS + WSS). **Não há deploy automático**
+
+OCPP implementado: **1.6J**. OCPP 2.0.1 não faz parte deste beta.
+
+## Funcionalidades
+
+Mapa e lista de estações, início/parada de recarga com evidência do carregador, carteira, pagamentos sandbox, operação OCPP (RemoteStart/Stop, Reset, ChangeAvailability), dashboard administrativo.
+
+## Arquitetura
+
+```
+Driver ──HTTPS/JWT──► API NestJS ──► PostgreSQL
+Admin ──HTTPS/cookie BFF──► API
+Charge Point ──WSS OCPP 1.6J──► mesmo processo da API (/ocpp/{identity})
+```
+
+A API **não** pode ser serverless: o gateway OCPP precisa de WebSocket longo. Detalhes: [docs/deploy.md](docs/deploy.md) · [docs/architecture/overview.md](docs/architecture/overview.md).
 
 ## Stack
 
@@ -8,241 +39,135 @@ Plataforma de gerenciamento e recarga de veículos elétricos.
 |---|---|
 | Monorepo | Turborepo + pnpm |
 | API | NestJS + TypeScript |
-| Admin | Next.js + shadcn/ui |
-| Driver | React Native + Expo + Expo Router |
-| Banco | PostgreSQL (Supabase) + Prisma |
-| Shared | TypeScript + Zod |
-| Infra local opcional | Docker Compose |
+| Admin | Next.js |
+| Driver | React Native + Expo |
+| Banco | PostgreSQL + Prisma **6** (não atualize para 7 / Prisma Cloud) |
+| Protocolo | OCPP 1.6J (`@evcharge/ocpp`) |
+| Pagamento | Mock (padrão) + Asaas sandbox |
 
-## Pré-requisitos
-
-- Node.js >= 20
-- pnpm >= 9
-- Projeto Supabase com PostgreSQL habilitado
-
-> Docker é **opcional** — serve apenas para rodar PostgreSQL localmente. O fluxo padrão usa Supabase.
-
-## Instalação
+## Instalação local
 
 ```bash
-# 1. Instalar dependências
 pnpm install
-
-# 2. Configurar variáveis de ambiente
 cp .env.example .env
 cp packages/database/.env.example packages/database/.env
-
-# 3. Preencher DATABASE_URL e DIRECT_URL com as credenciais do Supabase
-#    Dashboard → Project Settings → Database → Connection string
-
-# 4. Gerar Prisma Client e aplicar schema
+# Preencha DATABASE_URL, DIRECT_URL, JWT_* (≥32 chars)
 pnpm db:generate
 pnpm db:push
-
-# 5. Iniciar todos os apps em modo desenvolvimento
+pnpm db:seed   # opcional — dados demo
 pnpm dev
 ```
 
-## Configuração Supabase
+JWT secrets de exemplo no `.env.example` são **recusados** no boot. Gere valores reais (`openssl rand -hex 32`).
 
-No [Supabase Dashboard](https://supabase.com/dashboard), acesse **Project Settings → Database** e copie:
+## Configurar
 
-| Variável | Uso | Porta |
-|---|---|---|
-| `DATABASE_URL` | Prisma Client / API (Transaction Pooler) | 6543 |
-| `DIRECT_URL` | Prisma CLI (`db push`, `migrate`, `studio`) | 5432 |
+Todas as variáveis estão comentadas em [`.env.example`](.env.example). Nunca commite `.env`, chaves Asaas, JWT ou secrets OCPP.
 
-**Importante:**
-- `DATABASE_URL` deve incluir `?pgbouncer=true` quando usar o pooler
-- `DIRECT_URL` usa conexão direta — necessária para migrations
-- Nunca commite URLs ou senhas reais no repositório
-
-## Scripts
-
-| Comando | Descrição |
+| Variável | Função |
 |---|---|
-| `pnpm dev` | Inicia API, Admin, Driver e Simulador |
-| `pnpm build` | Build de todos os pacotes e apps |
-| `pnpm lint` | ESLint em todo o monorepo |
-| `pnpm typecheck` | Verificação de tipos TypeScript |
-| `pnpm test` | Testes unitários e E2E (API) |
-| `pnpm db:generate` | Gera Prisma Client |
-| `pnpm db:push` | Aplica schema ao banco Supabase |
-| `pnpm db:migrate` | Cria/aplica migrations |
-| `pnpm db:seed` | Popula dados demo (idempotente) |
-| `pnpm db:studio` | Abre Prisma Studio |
-| `pnpm simulator` | Simulador mock legado |
-| `pnpm charger:simulator` | Simulador OCPP 1.6J (`EVSE-CUIABA-001`) |
+| `CHARGER_PROVIDER_TYPE=mock` | Padrão local/testes |
+| `PAYMENT_PROVIDER=mock` | Padrão; Asaas só com `PAYMENT_API_KEY` |
+| `CORS_ORIGINS` | Origens HTTPS extras (localhost já entra) |
+| `OCPP_PUBLIC_URL` | Base `ws://` local ou `wss://` na internet |
 
-## Apps
-
-| App | Porta | URL |
-|---|---|---|
-| API (NestJS) | 3001 | http://localhost:3001/api |
-| Admin (Next.js) | 3000 | http://localhost:3000 |
-| Driver (Expo) | 8081 | http://localhost:8081 (web) |
-| Charger Simulator | — | Processo standalone |
-
-### Driver (Expo)
+## Rodar testes
 
 ```bash
-pnpm --filter @evcharge/driver dev
+pnpm lint
+pnpm typecheck
+pnpm test
 ```
 
-Pressione `w` no terminal do Expo para abrir a versão web em http://localhost:8081.
+## Acessos locais
 
-## Estrutura
-
-```
-apps/
-  api/                  # NestJS REST API + gateway OCPP 1.6J
-  admin/                # Next.js painel administrativo
-  driver/               # Expo app motorista
-  charger-simulator/    # Simulador OCPP 1.6J (e modo mock)
-
-packages/
-  domain/               # Regras de negócio e erros de domínio
-  database/             # Prisma schema e client
-  charger-provider/     # Abstração ChargerProvider (Mock + OCPP)
-  payment-provider/     # PaymentProvider (Mock + Asaas sandbox)
-  ocpp/                 # Framing, schemas e mappers OCPP 1.6J
-  shared/               # Schemas Zod, tipos e constantes
-  ui/                   # Componentes UI compartilhados
-```
-
-## Docker (opcional)
-
-Para desenvolvimento offline com PostgreSQL local:
-
-```bash
-docker compose up -d
-```
-
-Configure `.env` com URLs locais:
-
-```
-DATABASE_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
-DIRECT_URL="postgresql://evcharge:evcharge@localhost:5432/evcharge?schema=public"
-```
-
-## Endpoints (Fase 2)
-
-Documentação interativa: **http://localhost:3001/api/docs**
-
-Documentação interativa: **http://localhost:3001/api/docs**
-
-### Auth
-- `POST /api/auth/register` — Registro (driver ou operator/admin com empresa)
-- `POST /api/auth/login` — Login
-- `POST /api/auth/refresh` — Renovar access token (rotação de refresh token)
-- `POST /api/auth/logout` — Revogar refresh token
-- `GET /api/auth/me` — Usuário autenticado
-
-### Users
-- `GET /api/users/me` — Perfil do usuário
-- `PATCH /api/users/me` — Atualizar perfil
-
-### Companies
-- `GET /api/companies/:id` — Detalhe da empresa (isolamento multi-tenant)
-- `POST /api/companies` — Criar empresa (super_admin)
-- `PATCH /api/companies/:id` — Atualizar empresa (admin+)
-
-### Vehicles
-- `GET/POST /api/vehicles` — CRUD de veículos (driver: apenas próprios)
-
-### Stations / Chargers / Connectors
-- CRUD completo com filtros geo/status em stations
-- Operadores restritos à própria empresa
-
-### Health
-- `GET /api/health` — Health check (inclui status do banco)
-
-### Sessions (Fase 2)
-- `POST /api/sessions/start` — Iniciar recarga (`connectorId`, `vehicleId`)
-- `POST /api/sessions/:id/stop` — Encerrar recarga
-- `POST /api/sessions/:id/pause` — Pausar
-- `POST /api/sessions/:id/resume` — Retomar
-- `GET /api/sessions` — Histórico (filtros por status/estação/período)
-- `GET /api/sessions/:id` — Detalhe da sessão
-- `GET /api/sessions/active/live` — Sessões ativas (operador)
-
-WebSocket frontend: `ws://localhost:3001/realtime` (JWT no `auth.token`)  
-WebSocket OCPP: `ws://localhost:3001/ocpp/{identity}` (subprotocolo `ocpp1.6`, Basic auth de equipamento)
-
-### Pagamentos / billing (Fase 7)
-- `POST /api/payments` — PIX/cartão/wallet via `PaymentProvider` (mock por padrão, Asaas sandbox opcional)
-- `GET /api/payments/capabilities` — provider, ambiente e capacidades
-- `POST /api/payments/:id/simulate` — confirmar/recusar apenas no mock
-- `POST /api/payments/:id/refund` — estorno (operador/admin, com motivo)
-- `POST /api/payments/webhooks/:provider` — webhook assinado e idempotente
-- `GET /api/finance/summary` — KPIs
-- `GET /api/finance/reconciliation` — divergências financeiras
-- Sessão: hold de carteira ou pré-autorização de cartão **antes** do RemoteStart; capture no StopTransaction
-
-Documentação: [docs/payment-provider.md](docs/payment-provider.md) · [docs/billing.md](docs/billing.md) · [docs/payment-webhooks.md](docs/payment-webhooks.md) · [docs/financial-reconciliation.md](docs/financial-reconciliation.md) · [docs/payments.md](docs/payments.md) · [docs/reservations.md](docs/reservations.md)
-
-### Reservas / fila
-- `POST /api/reservations` / `GET /api/reservations/me`
-- `POST /api/waitlist` / `POST /api/waitlist/:id/claim`
-- `GET/POST /api/favorites`
-- `GET /api/tariffs/quote` — estimativa calculada no backend
-
-## Roles
-
-| Role | Escopo |
+| App | URL |
 |---|---|
-| `driver` | Próprios dados e veículos; leitura de infraestrutura |
-| `operator` | Dados da empresa |
-| `admin` | Administração da empresa |
-| `super_admin` | Acesso global |
+| API | http://localhost:3001/api |
+| Swagger | http://localhost:3001/api/docs |
+| Health | http://localhost:3001/api/health |
+| Admin | http://localhost:3000 |
+| Driver | http://localhost:8081 |
+| OCPP | `ws://localhost:3001/ocpp/EVSE-CUIABA-001` |
 
-## Dados demo (`pnpm db:seed`)
+Demo: senha `Demo@12345` · `superadmin@evcharge.demo` · `driver1@evcharge.demo` · charger `EVSE-CUIABA-001` (secret de seed `DemoCharger@12345`).
 
-Senha de todos os usuários demo: `Demo@12345`
-
-| Usuário | Email |
-|---|---|
-| Super admin | `superadmin@evcharge.demo` |
-| Operador SP | `operator.sp@evcharge.demo` |
-| Operador RJ | `operator.rj@evcharge.demo` |
-| Operador MT | `operator.mt@evcharge.demo` |
-| Admin SP | `admin.sp@evcharge.demo` |
-| Motoristas | `driver1@evcharge.demo` … `driver5@evcharge.demo` |
-
-Empresas: `evcharge-sp`, `evcharge-rj`, `evcharge-mt` — estações, carregadores mock e um charger OCPP `EVSE-CUIABA-001` (OFFLINE até o simulador conectar).
-Wallets demo: R$ 100,00 por motorista. Tarifas: R$ 1,89/kWh (SP/MT), R$ 1,75/kWh (RJ).
-
-## OCPP 1.6J
-
-A recarga mock continua no `MockChargerProvider` **dentro da API** (`CHARGER_PROVIDER_TYPE=mock`).
-
-Carregadores com `providerId=ocpp16` falam OCPP 1.6J:
+## Simulador OCPP
 
 ```bash
 pnpm --filter @evcharge/api dev
-
 CHARGER_ID=EVSE-CUIABA-001 \
 OCPP_URL=ws://localhost:3001/ocpp \
 CHARGER_SECRET=DemoCharger@12345 \
 pnpm charger:simulator
 ```
 
-Fluxo: Driver start → RemoteStartTransaction → StartTransaction → MeterValues → Driver stop → RemoteStopTransaction → StopTransaction → recibo.
+Admin → Carregadores deve mostrar ONLINE após BootNotification.
 
-Documentação completa: [docs/ocpp.md](docs/ocpp.md)
+## Cadastrar carregador
 
-O simulador mock legado permanece:
+Admin → Estações → criar charger com `identity` única e `providerId=ocpp16` → abrir o charger → **Gerar credencial OCPP**.
 
-```bash
-pnpm simulator
-pnpm --filter @evcharge/charger-simulator dev -- --mode mock --scenario FAST --meter-interval 2000
+## Carregador físico
+
+1. Publicar a API com **WSS** ([docs/deploy.md](docs/deploy.md)).
+2. No painel do equipamento: URL `wss://ocpp.seudominio.com/ocpp/{identity}`, protocolo 1.6J, Basic auth.
+3. Guia do técnico: [docs/manual/charger-installation.md](docs/manual/charger-installation.md).
+
+## Deploy
+
+Não publicamos em nenhuma conta por você.
+
+1. VPS + Caddy (`docker-compose.production.yml`)
+2. Postgres que você já usa
+3. Quatro DNS: `api`, `ocpp`, `admin`, `app`
+4. `.env.production` a partir de `.env.production.example`
+
+Passo a passo: [docs/deploy.md](docs/deploy.md) · checklist: [docs/production-checklist.md](docs/production-checklist.md).
+
+## Manuais e fluxos
+
+- [Manual do sistema](docs/manual/system-manual.md)
+- [Manual do motorista](docs/manual/driver-manual.md)
+- [Manual do admin](docs/manual/admin-manual.md)
+- [OCPP](docs/ocpp.md)
+- [Ciclo da sessão](docs/architecture/session-lifecycle.md)
+- [Billing](docs/architecture/billing-flow.md)
+- [Fluxo de recarga](docs/architecture/charging-flow.md)
+- [API](docs/api.md)
+- [Troubleshooting](docs/manual/troubleshooting.md)
+
+## Scripts
+
+| Comando | Descrição |
+|---|---|
+| `pnpm dev` | API, Admin, Driver e simulador (turbo) |
+| `pnpm build` / `lint` / `typecheck` / `test` | Qualidade |
+| `pnpm db:generate` / `db:push` / `db:seed` / `db:studio` | Prisma |
+| `pnpm charger:simulator` | OCPP 1.6J local |
+
+Produção: `pnpm --filter @evcharge/database exec prisma migrate deploy` (use `DIRECT_URL`). Nunca `migrate reset` no banco real.
+
+## Estrutura
+
+```
+apps/api                 REST + OCPP + realtime
+apps/admin               Painel
+apps/driver              App motorista
+apps/charger-simulator   Charge Point de laboratório
+packages/database        Prisma 6 / PostgreSQL
+packages/ocpp            1.6J
+docs/                    Manuais e arquitetura
+deploy/                  Caddy + Dockerfiles
 ```
 
-## Fase atual
+Docker Compose **local** (`docker-compose.yml`) sobe só Postgres opcional. Compose **produção** (`docker-compose.production.yml`) sobe API+Admin+Driver+Caddy e **não** substitui o banco.
 
-**Fase 7 — Pagamento real (sandbox)**: Asaas + MockPaymentProvider, PIX/cartão, webhooks assinados, hold de carteira, pré-autorização/capture por sessão, refund e reconciliação financeira.
+## Roles
 
-Documentação: [docs/payment-provider.md](docs/payment-provider.md) · [docs/billing.md](docs/billing.md) · [docs/payment-webhooks.md](docs/payment-webhooks.md) · [docs/financial-reconciliation.md](docs/financial-reconciliation.md)
-
-Não iniciar Fase 8 automaticamente.
-
+| Role | Escopo |
+|---|---|
+| DRIVER | App motorista |
+| OPERATOR | Operação da empresa |
+| ADMIN | Administração da empresa |
+| SUPER_ADMIN | Rede inteira |

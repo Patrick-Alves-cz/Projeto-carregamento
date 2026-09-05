@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import { ChargerCredentialStatus } from "@prisma/client";
@@ -54,6 +55,25 @@ export class OcppAuthService {
       identity: charger.identity,
       companyId: charger.station.companyId,
     };
+  }
+
+  async rotateCredential(chargerId: string, providedSecret?: string) {
+    const secret = providedSecret?.trim() || randomBytes(24).toString("base64url");
+    const rounds = Number(process.env.BCRYPT_ROUNDS ?? 12);
+    const credentialHash = await bcrypt.hash(secret, Number.isFinite(rounds) ? rounds : 12);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.chargerCredential.updateMany({
+        where: { chargerId, status: ChargerCredentialStatus.ACTIVE },
+        data: { status: ChargerCredentialStatus.REVOKED, rotatedAt: new Date() },
+      });
+      await tx.chargerCredential.create({
+        data: { chargerId, credentialHash },
+      });
+    });
+
+    this.logger.info("ocpp.credential.rotated", { chargerId });
+    return secret;
   }
 }
 

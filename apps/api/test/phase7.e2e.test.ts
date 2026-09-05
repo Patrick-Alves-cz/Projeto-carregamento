@@ -14,6 +14,7 @@ import { AppModule } from "../dist/app.module";
 import { PrismaService } from "../dist/common/database/database.module";
 import { ChargerProviderFactory } from "@evcharge/charger-provider";
 import { PaymentProviderFactory } from "@evcharge/payment-provider";
+import { releaseConnector } from "./release-connector";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describeIfDb = hasDatabase ? describe : describe.skip;
@@ -75,6 +76,7 @@ describeIfDb("Phase 7 payments, billing and reconciliation", () => {
     });
     assert.ok(connector);
     connectorId = connector.id;
+    await releaseConnector(prisma, connectorId);
 
     await prisma.wallet.updateMany({
       where: { userId: driverUserId },

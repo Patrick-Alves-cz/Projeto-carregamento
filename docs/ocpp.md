@@ -1,110 +1,99 @@
-# OCPP 1.6J
+# OCPP 1.6J no EV Charge
 
-A Fase 4 adiciona um gateway OCPP **separado** do WebSocket do frontend. O domínio de sessão continua falando com `ChargerProvider`. OCPP é um adapter.
+## O que é OCPP
 
-## Arquitetura
+OCPP (Open Charge Point Protocol) é o protocolo aberto entre um **Charge Point** (carregador) e um **CSMS** (sistema de gestão — neste projeto, a API EV Charge).
 
-```
-Charge Point (físico ou simulador)
-        │  WebSocket ocpp1.6
-        ▼
-OcppWsServer  (/ocpp/:identity)
-        │
-OcppAuthService (identity + credential hash)
-        │
-OcppConnectionManager
-        │
-OcppMessageRouter  → handlers (Boot, Heartbeat, Status, Authorize, Start/Stop, Meter)
-        │
-OcppInboundService  → Prisma + SessionsService + MeterService
-        │
-OcppChargerProvider ← RemoteStart / RemoteStop / Reset / ChangeAvailability
-        │
-Sessions / Wallet / Receipts / Domain events
-        │
-Frontend WebSocket `/realtime` (payload sanitizado)
-```
+Usamos **OCPP 1.6 JSON** (1.6J) sobre **WebSocket**. Não implementamos OCPP 2.0.1 nesta versão.
 
-```
-ChargerProvider
-├── MockChargerProvider   (default, testes Fase 1–3)
-└── OcppChargerProvider   (chargers com providerId = ocpp16)
-```
+Por que 1.6J: a maioria dos carregadores AC/DC comerciais no Brasil ainda fala 1.6 JSON. É o protocolo estável deste beta.
 
-O domínio **não** importa tipos OCPP. Mapeamento fica em `@evcharge/ocpp`.
+## Papéis
+
+| Termo | Significado aqui |
+|---|---|
+| Charge Point | Equipamento físico ou `apps/charger-simulator` |
+| CSMS / backend | `OcppWsServer` + handlers na API |
+| Connector | Tomada numerada (1, 2, …) mapeada para `Connector` no banco |
+| Transaction | Ciclo StartTransaction → MeterValues → StopTransaction (`OcppTransaction`) |
+| idTag | Identificador OCPP da autorização (gerado pela plataforma, máx. 20 chars) |
+| MeterValues | Amostras de energia/potência durante a sessão |
+| Heartbeat | “Estou vivo” periódico |
+| Boot | Primeira mensagem após conectar |
+
+O domínio de sessão fala com `ChargerProvider`. OCPP é um **adapter** (`OcppChargerProvider`). Mock (`MockChargerProvider`) continua o padrão (`CHARGER_PROVIDER_TYPE=mock`).
 
 ## Transporte
 
-- URL: `ws://localhost:3001/ocpp/{identity}`
+- Local: `ws://localhost:3001/ocpp/{identity}`
+- Internet: `wss://ocpp.seudominio.com/ocpp/{identity}`
 - Subprotocolo: `ocpp1.6`
-- Auth: HTTP Basic `identity:secret`
-- Segredo **nunca** é persistido em texto puro (`ChargerCredential.credentialHash`)
+- Auth: HTTP Basic `identity:secret` (secret só em hash bcrypt)
 - Uma conexão operacional por charger; reconexão substitui a anterior
+- Path **fora** de `/api` (upgrade HTTP cru)
 
-O WebSocket OCPP **não** é o Socket.IO do admin/driver (`/realtime`).
+Não confundir com Socket.IO `/realtime` (Admin/Driver).
+
+## Framing: CALL, CALLRESULT, CALLERROR
+
+OCPP 1.6J usa arrays JSON:
+
+| Tipo | Formato | Uso |
+|---|---|---|
+| **CALL** | `[2, uniqueId, action, payload]` | Pedido (charger→CSMS ou CSMS→charger) |
+| **CALLRESULT** | `[3, uniqueId, payload]` | Resposta de sucesso ao mesmo `uniqueId` |
+| **CALLERROR** | `[4, uniqueId, errorCode, errorDescription, errorDetails]` | Payload inválido ou ação recusada |
+
+Mensagem malformada gera CALLERROR e **não** derruba a API.
 
 ## Mensagens implementadas
 
-Do carregador (CALL):
+| Mensagem OCPP | Direção | Função | Quando acontece |
+|---|---|---|---|
+| BootNotification | Charge Point → CSMS | Identifica vendor/model/firmware; CSMS responde `Accepted` + intervalo de heartbeat | Ao conectar / após reset |
+| Heartbeat | Charge Point → CSMS | Atualiza `lastSeenAt` | Periódico (`OCPP_HEARTBEAT_INTERVAL_SEC`, default 60s) |
+| StatusNotification | Charge Point → CSMS | Atualiza status do connector/charger | Sempre que o hardware muda de estado |
+| Authorize | Charge Point → CSMS | Valida `idTag` emitido pela plataforma | Antes de StartTransaction local ou após RemoteStart |
+| StartTransaction | Charge Point → CSMS | Cria `OcppTransaction`; sessão → **ACTIVE** | Cabo autenticado e energia pode fluir |
+| MeterValues | Charge Point → CSMS | Energia, potência, opcionalmente V/A/SoC | Durante a transação |
+| StopTransaction | Charge Point → CSMS | Encerra transação; evidência física de fim; dispara billing | Fim da carga ou RemoteStop honrado |
+| RemoteStartTransaction | CSMS → Charge Point | Pede início remoto com `idTag` + connectorId | Driver/Admin start **depois** da autorização financeira |
+| RemoteStopTransaction | CSMS → Charge Point | Pede parada remota | Driver/Admin stop; **não** captura pagamento sozinho |
+| Reset | CSMS → Charge Point | Soft/Hard reset | Comando admin com confirmação |
+| ChangeAvailability | CSMS → Charge Point | Operative / Inoperative | Comando admin; timeout e reconciliação se o charger não responder |
 
-| Mensagem | Efeito interno |
-|---|---|
-| BootNotification | vendor/model/firmware, lastSeen, Accepted |
-| Heartbeat | lastSeenAt |
-| StatusNotification | mapeia para status interno do connector/charger |
-| Authorize | valida `idTag` da plataforma |
-| StartTransaction | cria `OcppTransaction`, sessão → ACTIVE |
-| MeterValues | `MeterValue` + custo + evento `session.telemetry` |
-| StopTransaction | encerra sessão, recibo, débito |
-
-Do backend (CALL):
-
-| Mensagem | Origem |
-|---|---|
-| RemoteStartTransaction | Driver start **ou** admin |
-| RemoteStopTransaction | Driver/Admin stop |
-| Reset | Admin |
-| ChangeAvailability | Admin (comando registrado, timeout e reconciliação) |
-
-Não implementado nesta fase: OCPP 2.0.1 / 2.1, demais comandos 1.6.
+Não implementado: OCPP 2.0.1 / 2.1 e o restante do 1.6 (GetConfiguration, firmware, smart charging, etc.).
 
 ## Estados
 
-OCPP `Available`, `Preparing`, `Charging`, `SuspendedEV`, `SuspendedEVSE`, `Finishing`, `Unavailable`, `Faulted` são mapeados para o modelo interno (`AVAILABLE`, `PREPARING`, `CHARGING`, `PAUSED`/`SUSPENDED`, `FINISHING`, `UNAVAILABLE`, `FAULTED`). O schema interno **não** copia strings OCPP.
+Strings OCPP (`Available`, `Preparing`, `Charging`, `SuspendedEV`, `SuspendedEVSE`, `Finishing`, `Unavailable`, `Faulted`) são **mapeadas** para o modelo interno. O schema Prisma **não** armazena os nomes OCPP crus como enum de sessão.
 
-Sessão só fica `ACTIVE` após `StartTransaction` (OCPP). No mock, o start continua imediato.
+- Sessão `ACTIVE` só após `StartTransaction` (OCPP).
+- Encerramento financeiro só após `StopTransaction`.
+- No mock, o start pode ser imediato (demo).
 
-Encerramento financeiro só após `StopTransaction`, não após o envio de `RemoteStopTransaction`.
-
-## Segurança
+## Segurança e multi-tenant
 
 - Credencial de equipamento ≠ JWT de usuário
-- Multi-tenant: Company A não comanda charger da Company B
-- Driver não envia comandos OCPP
+- Company A não comanda charger da Company B
+- DRIVER não envia comandos OCPP
 - SUPER_ADMIN vê todos os carregadores
-- Logs estruturados; secrets, JWT e hashes são redigidos
-- Mensagem malformada responde CALLERROR e **não** derruba a API
+- Logs redigem secret, JWT e hashes
+- Geração/rotação: `POST /api/chargers/:id/ocpp/credential` (secret em texto **uma vez**)
 
-## Reconciliação
+## Watchdog e health
 
-`OcppWatchdog` marca OFFLINE se `lastSeenAt` passar do threshold (`OCPP_OFFLINE_THRESHOLD_MS`, default 180s), mesmo sem evento `close` do WebSocket. A Fase 6 classifica sessões presas como `RECOVERABLE`, `REQUIRES_RECONCILIATION` ou `CRITICAL` e abre `ReconciliationCase` **sem encerrar** a sessão automaticamente.
+`OcppWatchdog` marca OFFLINE se `lastSeenAt` passar de `OCPP_OFFLINE_THRESHOLD_MS` (180s), mesmo sem `close` do socket. Health interno (`HEALTHY`/`DEGRADED`) é separado do bit `ocppOnline`. Ver [charger-health.md](charger-health.md).
 
-Health interno (`HEALTHY`/`DEGRADED`/…) é calculado à parte do OCPP. Ver [docs/charger-health.md](charger-health.md).
-
-## Como testar
-
-1. `pnpm db:seed` — cria `EVSE-CUIABA-001` OFFLINE + secret `DemoCharger@12345`
-2. `pnpm --filter @evcharge/api dev`
-3. `pnpm charger:simulator`
-4. Admin → Carregadores → o charger deve ficar ONLINE após BootNotification
-5. Driver inicia recarga no conector CCS2 da estação de Cuiabá
-6. Simulador recebe RemoteStart, envia StartTransaction + MeterValues
-7. Driver vê telemetria; Admin vê CHARGING
-8. Driver stop → RemoteStop → StopTransaction → recibo e débito da wallet
+## Como testar localmente
 
 ```bash
+pnpm db:seed   # EVSE-CUIABA-001 + secret DemoCharger@12345
+pnpm --filter @evcharge/api dev
 CHARGER_ID=EVSE-CUIABA-001 \
 OCPP_URL=ws://localhost:3001/ocpp \
 CHARGER_SECRET=DemoCharger@12345 \
 pnpm charger:simulator
 ```
+
+Fluxo completo: [architecture/charging-flow.md](architecture/charging-flow.md) · instalação física: [manual/charger-installation.md](manual/charger-installation.md)

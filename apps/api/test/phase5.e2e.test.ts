@@ -13,6 +13,7 @@ config({ path: resolve(__dirname, "../../../packages/database/.env"), override: 
 import { AppModule } from "../dist/app.module";
 import { PrismaService } from "../dist/common/database/database.module";
 import { ChargerProviderFactory } from "@evcharge/charger-provider";
+import { releaseConnector } from "./release-connector";
 
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describeIfDb = hasDatabase ? describe : describe.skip;
@@ -71,13 +72,18 @@ describeIfDb("Phase 5 payments, reservations and waitlist", () => {
       where: {
         type: "CCS2",
         status: ConnectorStatus.AVAILABLE,
-        charger: { station: { companyId }, status: "AVAILABLE" },
+        charger: { status: "AVAILABLE", station: { companyId, status: "ACTIVE" } },
       },
       include: { charger: true },
     });
     assert.ok(connector);
     connectorId = connector.id;
     stationId = connector.charger.stationId;
+    await releaseConnector(prisma, connectorId);
+    await prisma.wallet.updateMany({
+      where: { userId: driverUserId },
+      data: { balanceCents: 20_000 },
+    });
   });
 
   after(async () => {
@@ -164,9 +170,28 @@ describeIfDb("Phase 5 payments, reservations and waitlist", () => {
   });
 
   it("rejects reservation conflicts, offline and faulted connectors", async () => {
+    const connector = await prisma.connector.findUniqueOrThrow({
+      where: { id: connectorId },
+      include: { charger: true },
+    });
+    await prisma.maintenanceWindow.updateMany({
+      where: {
+        status: { in: ["ACTIVE", "SCHEDULED"] },
+        OR: [{ stationId: connector.charger.stationId }, { chargerId: connector.chargerId }, { connectorId }],
+      },
+      data: { status: "CANCELLED" },
+    });
     await prisma.reservation.updateMany({
       where: { connectorId, status: { in: ["PENDING", "CONFIRMED", "ACTIVE"] } },
       data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+    await prisma.charger.update({
+      where: { id: connector.chargerId },
+      data: { status: ChargerStatus.AVAILABLE },
+    });
+    await prisma.connector.update({
+      where: { id: connectorId },
+      data: { status: ConnectorStatus.AVAILABLE },
     });
     const startAt = new Date(Date.now() + 20 * 60_000).toISOString();
     const endAt = new Date(Date.now() + 80 * 60_000).toISOString();

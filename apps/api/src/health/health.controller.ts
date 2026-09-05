@@ -1,4 +1,5 @@
 import { Controller, Get } from "@nestjs/common";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Public } from "../common/decorators/auth.decorators";
 import { PrismaService } from "../common/database/database.module";
 
@@ -7,6 +8,7 @@ export class HealthController {
   constructor(private prisma: PrismaService) {}
 
   @Public()
+  @SkipThrottle()
   @Get()
   async check() {
     let database: "connected" | "disconnected" = "disconnected";

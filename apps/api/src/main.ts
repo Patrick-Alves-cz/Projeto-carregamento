@@ -6,6 +6,7 @@ import { IoAdapter } from "@nestjs/platform-socket.io";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import { AppModule } from "./app.module";
+import { getAllowedCorsOrigins } from "./common/config/cors-origins";
 import {
   getRequiredJwtAccessSecret,
   getRequiredJwtRefreshSecret,
@@ -19,18 +20,15 @@ async function bootstrap() {
   getRequiredJwtRefreshSecret();
 
   const app = await NestFactory.create(AppModule);
+  const expressApp = app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void };
+  expressApp.set("trust proxy", 1);
   app.use(cookieParser());
   app.useWebSocketAdapter(new IoAdapter(app));
 
   app.setGlobalPrefix("api");
 
   app.enableCors({
-    origin: [
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-      "http://localhost:8081",
-      "http://127.0.0.1:8081",
-    ],
+    origin: getAllowedCorsOrigins(),
     credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
@@ -52,22 +50,26 @@ async function bootstrap() {
         "Invitations: POST /invitations (ADMIN+), POST /invitations/:token/accept, POST /invitations/:id/revoke.",
         "Password recovery: POST /auth/forgot-password, POST /auth/reset-password.",
         "OCPP 1.6J gateway: wss://host/ocpp/:identity (subprotocol ocpp1.6).",
-        "Admin OCPP: GET /chargers/:id/ocpp, POST /chargers/:id/ocpp/command.",
+        "Admin OCPP: GET /chargers/:id/ocpp, POST /chargers/:id/ocpp/command, POST /chargers/:id/ocpp/credential.",
       ].join("\n"),
     )
-    .setVersion("1.4.0")
+    .setVersion("1.5.0")
     .addBearerAuth()
     .addCookieAuth("evcharge_access")
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("api/docs", app, document);
+  if (process.env.SWAGGER_ENABLED !== "false") {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("api/docs", app, document);
+  }
 
   const port = process.env.API_PORT ?? 3001;
   await app.listen(port);
 
   console.log(`API running on http://localhost:${port}/api`);
-  console.log(`Swagger docs on http://localhost:${port}/api/docs`);
+  if (process.env.SWAGGER_ENABLED !== "false") {
+    console.log(`Swagger docs on http://localhost:${port}/api/docs`);
+  }
 }
 
 bootstrap();

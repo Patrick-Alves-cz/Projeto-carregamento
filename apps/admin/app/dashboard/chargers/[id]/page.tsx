@@ -14,7 +14,7 @@ import { QueryError } from "@/components/query-state";
 import { StatusBadge } from "@/components/status-badge";
 import { useQuery } from "@/hooks/use-query";
 import { useRealtime } from "@/hooks/use-realtime";
-import { getChargerOcpp, sendOcppCommand } from "@/lib/api-client";
+import { getChargerOcpp, rotateOcppCredential, sendOcppCommand } from "@/lib/api-client";
 import { chargerStatusLabel, connectorStatusLabel, formatCurrency, formatEnergy } from "@/lib/labels";
 
 export default function ChargerDetailPage() {
@@ -23,6 +23,7 @@ export default function ChargerDetailPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [idTag, setIdTag] = useState("ADMINSTART01");
   const [error, setError] = useState("");
+  const [credential, setCredential] = useState<{ ocppUrl: string; secret: string; identity: string } | null>(null);
   const { data, error: loadError, loading } = useQuery(() => getChargerOcpp(params.id), [params.id, tick]);
   useRealtime(() => setTick((value) => value + 1));
 
@@ -154,6 +155,58 @@ export default function ChargerDetailPage() {
           ) : (
             <p className="text-sm text-muted-foreground">Nenhuma transação OCPP ativa.</p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Conexão OCPP (carregador físico)</CardTitle>
+          <CardDescription>
+            Identity e URL para o painel do equipamento. O secret só aparece uma vez após gerar.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm">
+            Identity: <span className="font-mono">{data.identity ?? data.serialNumber}</span>
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={Boolean(busy)}
+            onClick={async () => {
+              if (
+                !window.confirm(
+                  "Gerar uma nova credencial OCPP? A senha anterior deixa de funcionar imediatamente.",
+                )
+              ) {
+                return;
+              }
+              setBusy("credential");
+              setError("");
+              try {
+                const result = await rotateOcppCredential(params.id);
+                setCredential({
+                  ocppUrl: result.ocppUrl,
+                  secret: result.secret,
+                  identity: result.identity,
+                });
+              } catch (err: unknown) {
+                setError(err instanceof Error ? err.message : "Falha ao gerar credencial");
+              } finally {
+                setBusy(null);
+              }
+            }}
+          >
+            Gerar credencial OCPP
+          </Button>
+          {credential ? (
+            <div className="space-y-1 rounded-lg border bg-muted/40 p-3 font-mono text-sm">
+              <p>URL: {credential.ocppUrl}</p>
+              <p>Identity / usuário: {credential.identity}</p>
+              <p>Password: {credential.secret}</p>
+              <p className="font-sans text-muted-foreground">Guarde agora. Não será exibido novamente.</p>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
