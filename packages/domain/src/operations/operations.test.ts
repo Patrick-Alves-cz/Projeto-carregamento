@@ -6,6 +6,7 @@ import { calculateReliabilityScore } from "./reliability";
 import { deriveStationAvailability } from "./availability";
 import { estimateWaitMinutes } from "./wait-time";
 import { detectMeteringAnomaly } from "./metering";
+import { sessionVisualState } from "./driver-errors";
 
 describe("communication freshness", () => {
   const now = new Date("2026-09-05T12:00:00Z");
@@ -198,6 +199,20 @@ describe("metering anomalies", () => {
     assert.equal(
       detectMeteringAnomaly({ previousEnergyKwh: 1, energyKwh: 60, powerKw: 40 }),
       "ENERGY_SPIKE",
+    );
+  });
+});
+
+describe("session visual billing states", () => {
+  it("keeps payment language driver-facing", () => {
+    assert.equal(sessionVisualState({ status: "ACTIVE" }).label, "Carregando");
+    assert.equal(
+      sessionVisualState({ status: "COMPLETED", billingStatus: "CAPTURED" }).label,
+      "Pagamento concluído",
+    );
+    assert.equal(
+      sessionVisualState({ status: "COMPLETED", billingStatus: "PAYMENT_FAILED" }).label,
+      "Pagamento falhou",
     );
   });
 });

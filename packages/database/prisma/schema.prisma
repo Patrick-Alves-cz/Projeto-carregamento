@@ -112,12 +112,37 @@ enum WalletTransactionType {
 enum PaymentStatus {
   PENDING
   AUTHORIZED
+  PROCESSING
   CONFIRMED
   COMPLETED
   FAILED
   CANCELLED
-  REFUNDED
   EXPIRED
+  REFUND_PENDING
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum WalletHoldStatus {
+  OPEN
+  CAPTURED
+  RELEASED
+  EXPIRED
+}
+
+enum PaymentAuthorizationStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  RELEASED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentReconciliationStatus {
+  OPEN
+  RESOLVED
+  IGNORED
 }
 
 enum WalletTxKind {
@@ -364,8 +389,9 @@ model Company {
   incidents              Incident[]
   maintenanceWindows     MaintenanceWindow[]
   chargerCommands        ChargerCommand[]
-  reliabilitySnapshots   ChargerReliabilitySnapshot[]
-  reconciliationCases    ReconciliationCase[]
+  reliabilitySnapshots         ChargerReliabilitySnapshot[]
+  reconciliationCases          ReconciliationCase[]
+  paymentReconciliationCases   PaymentReconciliationCase[]
 
   @@map("companies")
 }
@@ -563,6 +589,7 @@ model ChargingSession {
   idleStartedAt        DateTime?          @map("idle_started_at")
   lastMeterAt          DateTime?          @map("last_meter_at")
   watchdogClass        String?            @map("watchdog_class")
+  billingStatus        String             @default("NONE") @map("billing_status")
   idempotencyKey       String?            @map("idempotency_key")
   stopIdempotencyKey   String?            @map("stop_idempotency_key")
   createdAt            DateTime           @default(now()) @map("created_at")
@@ -579,8 +606,11 @@ model ChargingSession {
   ocppTxs            OcppTransaction[]
   ocppAuths           OcppAuthorization[]
   reservation         Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
-  incidents           Incident[]
-  reconciliationCases ReconciliationCase[]
+  incidents              Incident[]
+  reconciliationCases    ReconciliationCase[]
+  walletHold             WalletHold?
+  paymentAuthorization   PaymentAuthorization?
+  paymentReconciliations PaymentReconciliationCase[]
 
   @@unique([userId, idempotencyKey])
   @@unique([userId, stopIdempotencyKey])
@@ -621,8 +651,28 @@ model Wallet {
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions WalletTransaction[]
+  holds        WalletHold[]
 
   @@map("wallets")
+}
+
+model WalletHold {
+  id             String           @id @default(cuid())
+  walletId       String           @map("wallet_id")
+  sessionId      String           @unique @map("session_id")
+  amountCents    Int              @map("amount_cents")
+  capturedCents  Int              @default(0) @map("captured_cents")
+  releasedCents  Int              @default(0) @map("released_cents")
+  status         WalletHoldStatus @default(OPEN)
+  idempotencyKey String           @unique @map("idempotency_key")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  wallet  Wallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, status])
+  @@map("wallet_holds")
 }
 
 model WalletTransaction {
@@ -663,16 +713,22 @@ model Payment {
   confirmedAt     DateTime?     @map("confirmed_at")
   cancelledAt     DateTime?     @map("cancelled_at")
   failureCode     String?       @map("failure_code")
-  walletCredited  Boolean       @default(false) @map("wallet_credited")
-  idempotencyKey  String?       @unique @map("idempotency_key")
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
+  walletCredited       Boolean @default(false) @map("wallet_credited")
+  refundedAmountCents  Int     @default(0) @map("refunded_amount_cents")
+  refundReason         String? @map("refund_reason")
+  refundRequestedAt    DateTime? @map("refund_requested_at")
+  refundIdempotencyKey String? @unique @map("refund_idempotency_key")
+  idempotencyKey       String? @unique @map("idempotency_key")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  session       ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  paymentMethod PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  webhookEvents PaymentWebhookEvent[]
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company         Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  session         ChargingSession?        @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  paymentMethod   PaymentMethod?          @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  webhookEvents   PaymentWebhookEvent[]
+  authorizations  PaymentAuthorization[]
+  reconciliations PaymentReconciliationCase[]
 
   @@index([userId, createdAt])
   @@index([companyId, status, createdAt])
@@ -703,20 +759,69 @@ model PaymentMethod {
 }
 
 model PaymentWebhookEvent {
-  id              String    @id @default(cuid())
-  provider        String
-  externalEventId String    @map("external_event_id")
-  paymentId       String?   @map("payment_id")
-  eventType       String    @map("event_type")
-  payload         Json      @default("{}")
-  processedAt     DateTime? @map("processed_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
+  id                 String    @id @default(cuid())
+  provider           String
+  externalEventId    String    @map("external_event_id")
+  eventType          String    @map("event_type")
+  providerPaymentId  String?   @map("provider_payment_id")
+  paymentId          String?   @map("payment_id")
+  payload            Json      @default("{}")
+  status             String    @default("RECEIVED")
+  errorSanitized     String?   @map("error_sanitized")
+  receivedAt         DateTime  @default(now()) @map("received_at")
+  processedAt        DateTime? @map("processed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
 
   @@unique([provider, externalEventId])
   @@index([paymentId])
+  @@index([status, receivedAt])
   @@map("payment_webhook_events")
+}
+
+model PaymentAuthorization {
+  id                     String                      @id @default(cuid())
+  sessionId              String                      @unique @map("session_id")
+  paymentId              String?                     @map("payment_id")
+  method                 String
+  authorizedAmountCents  Int                         @map("authorized_amount_cents")
+  capturedAmountCents    Int                         @default(0) @map("captured_amount_cents")
+  releasedAmountCents    Int                         @default(0) @map("released_amount_cents")
+  status                 PaymentAuthorizationStatus  @default(PENDING)
+  providerReference      String?                     @map("provider_reference")
+  createdAt              DateTime                    @default(now()) @map("created_at")
+  updatedAt              DateTime                    @updatedAt @map("updated_at")
+
+  session ChargingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  payment Payment?        @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId, status])
+  @@map("payment_authorizations")
+}
+
+model PaymentReconciliationCase {
+  id             String                       @id @default(cuid())
+  companyId      String                       @map("company_id")
+  paymentId      String?                      @map("payment_id")
+  sessionId      String?                      @map("session_id")
+  reason         String
+  status         PaymentReconciliationStatus  @default(OPEN)
+  details        Json                         @default("{}")
+  detectedAt     DateTime                     @default(now()) @map("detected_at")
+  resolvedAt     DateTime?                    @map("resolved_at")
+  resolution     String?
+  createdAt      DateTime                     @default(now()) @map("created_at")
+  updatedAt      DateTime                     @updatedAt @map("updated_at")
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payment Payment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  session ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, detectedAt])
+  @@index([paymentId, status])
+  @@index([sessionId, status])
+  @@map("payment_reconciliation_cases")
 }
 
 model Reservation {

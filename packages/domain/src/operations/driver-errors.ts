@@ -10,6 +10,9 @@ export const DRIVER_ERROR_MESSAGES: Record<string, string> = {
   RESERVATION_WINDOW: "Você ainda não está na janela para iniciar esta reserva.",
   RESERVATION_EXPIRED: "A janela da reserva já expirou.",
   COMMUNICATION_LOSS: "Falha de comunicação com o carregador. Aguarde ou tente outro conector.",
+  PAYMENT_FAILED: "Não foi possível autorizar o pagamento. Tente outro método.",
+  PAYMENT_REQUIRES_ACTION: "Confirme o pagamento para iniciar a recarga.",
+  PAYMENT_PENDING: "Pagamento pendente. A recarga já foi registrada.",
 };
 
 export function driverFacingMessage(code: string | undefined, fallback: string): string {
@@ -22,9 +25,13 @@ export function sessionVisualState(input: {
   communicationStale?: boolean;
   chargingComplete?: boolean;
   idle?: boolean;
+  billingStatus?: string;
 }): { code: string; label: string } {
   if (input.communicationStale) {
     return { code: "COMMUNICATION_LOSS", label: "Falha de comunicação" };
+  }
+  if (input.billingStatus === "PAYMENT_FAILED") {
+    return { code: "PAYMENT_FAILED", label: "Pagamento falhou" };
   }
   if (input.status === "PREPARING" || input.status === "PENDING") {
     return { code: "PREPARING", label: "Preparando carregador" };
@@ -35,7 +42,15 @@ export function sessionVisualState(input: {
     return { code: "CHARGING_COMPLETE", label: "Carregamento concluído" };
   }
   if (input.status === "IDLE") return { code: "IDLE", label: "Veículo ainda conectado" };
-  if (input.status === "COMPLETED") return { code: "COMPLETED", label: "Finalizando" };
+  if (input.status === "COMPLETED") {
+    if (input.billingStatus === "CAPTURED") {
+      return { code: "PAYMENT_COMPLETED", label: "Pagamento concluído" };
+    }
+    if (input.billingStatus === "AUTHORIZED" || input.billingStatus === "NONE") {
+      return { code: "PAYMENT_PENDING", label: "Finalizando cobrança" };
+    }
+    return { code: "COMPLETED", label: "Pagamento concluído" };
+  }
   if (input.status === "FAILED") return { code: "FAILED", label: "Falha de comunicação" };
   return { code: input.status, label: input.status };
 }

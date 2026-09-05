@@ -65,6 +65,23 @@ export function sessionStatusLabel(status: string) {
   return SESSION_STATUS[status] ?? status;
 }
 
+export function paymentStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    PENDING: "Pendente",
+    AUTHORIZED: "Autorizado",
+    PROCESSING: "Processando",
+    CONFIRMED: "Pago",
+    COMPLETED: "Concluído",
+    FAILED: "Falhou",
+    CANCELLED: "Cancelado",
+    EXPIRED: "Expirado",
+    REFUND_PENDING: "Estorno pendente",
+    REFUNDED: "Estornado",
+    PARTIALLY_REFUNDED: "Estorno parcial",
+  };
+  return labels[status] ?? status;
+}
+
 export function roleLabel(role: string) {
   return ROLES[role] ?? role;
 }

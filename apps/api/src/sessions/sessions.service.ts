@@ -39,6 +39,7 @@ import { ReservationsService } from "../reservations/reservations.service";
 import { WaitlistService } from "../reservations/waitlist.service";
 import { TariffsService } from "../tariffs/tariffs.service";
 import { WalletService } from "../wallet/wallet.service";
+import { SessionBillingService } from "../payments/session-billing.service";
 import { AuditLogger } from "../common/logging/audit-logger";
 
 const sessionInclude = {
@@ -104,6 +105,7 @@ export class SessionsService {
     private readonly notifications: NotificationsService,
     private readonly reservations: ReservationsService,
     private readonly waitlist: WaitlistService,
+    private readonly billing: SessionBillingService,
   ) {}
 
   async start(input: StartSessionInput, user: AuthenticatedUser) {
@@ -187,7 +189,9 @@ export class SessionsService {
     const { tariff: activeTariff, snapshot: tariffSnapshot } =
       await this.tariffsService.resolveForConnector(input.connectorId);
 
-    await this.walletService.assertMinimumBalance(user.id, activeTariff.minBalanceCents);
+    if ((input.paymentKind ?? "WALLET") !== "CARD") {
+      await this.walletService.assertMinimumBalance(user.id, activeTariff.minBalanceCents);
+    }
 
     const companyId = charger.station.companyId;
     let sessionId: string | null = null;
@@ -282,6 +286,16 @@ export class SessionsService {
       sessionId = created.id;
       const idTag = created.idTag ?? makeIdTag(created.id);
 
+      await this.prisma.$transaction(async (tx) => {
+        await this.billing.authorizeInTx(tx, {
+          userId: user.id,
+          sessionId: created.id,
+          paymentKind: input.paymentKind ?? "WALLET",
+          paymentMethodId: input.paymentMethodId,
+          snapshot: tariffSnapshot,
+        });
+      });
+
       let outcome: unknown;
       try {
         outcome = await this.chargerProviderService.startCharging(
@@ -375,7 +389,7 @@ export class SessionsService {
         },
       });
 
-      if (tariffSnapshot.connectionFeeCents > 0) {
+      if (tariffSnapshot.connectionFeeCents > 0 && activeSession.billingStatus === "NONE") {
         await this.prisma.$transaction(async (tx) => {
           await this.walletService.debitForSession(tx, {
             userId: user.id,
@@ -869,7 +883,7 @@ export class SessionsService {
     });
 
     const snapshot = readTariffSnapshot(started.tariffSnapshot);
-    if (snapshot && snapshot.connectionFeeCents > 0 && started.costCents === 0) {
+    if (snapshot && snapshot.connectionFeeCents > 0 && started.costCents === 0 && started.billingStatus === "NONE") {
       await this.prisma.$transaction(async (tx) => {
         await this.walletService.debitForSession(tx, {
           userId: started.userId,
@@ -949,7 +963,10 @@ export class SessionsService {
         })
       : null;
     const costCents = Math.max(session.costCents, breakdown?.totalCents ?? session.costCents);
-    const deltaCents = costCents - session.costCents;
+    const hold = await this.prisma.walletHold.findUnique({ where: { sessionId } });
+    const auth = await this.prisma.paymentAuthorization.findUnique({ where: { sessionId } });
+    const prepaid = Boolean(hold || auth);
+    const deltaCents = prepaid ? 0 : costCents - session.costCents;
     await this.prisma.$transaction(async (tx) => {
       await tx.chargingSession.update({
         where: { id: sessionId },
@@ -1051,6 +1068,29 @@ export class SessionsService {
 
       await this.syncChargerStatus(tx, session.connector.chargerId);
 
+      try {
+        await this.billing.finalizeInTx(tx, session.id, updated.costCents);
+      } catch {
+        const chargerId = session.connector.chargerId;
+        const openKey = `PAYMENT_FAILURE:${chargerId}:none:${session.id}`;
+        const existingIssue = await tx.incident.findUnique({ where: { openKey } });
+        if (!existingIssue) {
+          await tx.incident.create({
+            data: {
+              companyId: session.connector.charger.station.companyId,
+              stationId: session.connector.charger.stationId,
+              chargerId,
+              sessionId: session.id,
+              type: "PAYMENT_FAILURE",
+              severity: "HIGH",
+              title: "Cobrança pendente da sessão",
+              description: "A sessão terminou, mas a cobrança final não foi liquidada.",
+              openKey,
+            },
+          });
+        }
+      }
+
       const existingPayment = await tx.payment.findUnique({
         where: { sessionId: session.id },
       });
@@ -1138,6 +1178,7 @@ export class SessionsService {
     chargerId: string,
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      await this.billing.releaseInTx(tx, sessionId);
       const session = await tx.chargingSession.findUnique({ where: { id: sessionId } });
       if (session && (session.status === SessionStatus.PENDING || session.status === SessionStatus.PREPARING)) {
         assertSessionStatusTransition(session.status, SessionStatus.FAILED);
@@ -1272,6 +1313,7 @@ export class SessionsService {
           freshness === "STALE" || freshness === "OFFLINE",
         chargingComplete: session.status === SessionStatus.CHARGING_COMPLETE,
         idle: session.status === SessionStatus.IDLE,
+        billingStatus: session.billingStatus,
       }),
       freshness,
       meterValues: session.meterValues?.map((mv) => ({

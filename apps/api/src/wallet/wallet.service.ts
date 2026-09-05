@@ -34,13 +34,29 @@ export class WalletService {
   async getMine(user: AuthenticatedUser) {
     this.assertDriver(user);
     const wallet = await this.getOrCreateWallet(user.id);
+    const held = await this.prisma.walletHold.aggregate({
+      where: { walletId: wallet.id, status: "OPEN" },
+      _sum: { amountCents: true },
+    });
+    const heldCents = held._sum.amountCents ?? 0;
     return {
       id: wallet.id,
       userId: wallet.userId,
       balanceCents: wallet.balanceCents,
+      heldCents,
+      availableCents: wallet.balanceCents - heldCents,
       currency: wallet.currency,
       updatedAt: wallet.updatedAt,
     };
+  }
+
+  async availableCents(userId: string): Promise<number> {
+    const wallet = await this.getOrCreateWallet(userId);
+    const held = await this.prisma.walletHold.aggregate({
+      where: { walletId: wallet.id, status: "OPEN" },
+      _sum: { amountCents: true },
+    });
+    return wallet.balanceCents - (held._sum.amountCents ?? 0);
   }
 
   async listTransactions(user: AuthenticatedUser, query: ListWalletTransactionsQuery) {
@@ -60,15 +76,88 @@ export class WalletService {
   }
 
   async assertMinimumBalance(userId: string, minBalanceCents: number): Promise<void> {
-    const wallet = await this.getOrCreateWallet(userId);
-    if (wallet.balanceCents < minBalanceCents) {
-      this.audit.warn("wallet.insufficient", {
-        userId,
-        minBalanceCents,
-        balanceCents: wallet.balanceCents,
-      });
+    const available = await this.availableCents(userId);
+    if (available < minBalanceCents) {
+      this.audit.warn("wallet.insufficient", { userId, minBalanceCents, availableCents: available });
       throw new InsufficientBalanceError("Adicione saldo para iniciar a recarga.");
     }
+  }
+
+  async createHold(
+    tx: Prisma.TransactionClient,
+    params: { userId: string; sessionId: string; amountCents: number; idempotencyKey: string },
+  ) {
+    const existing = await tx.walletHold.findUnique({ where: { idempotencyKey: params.idempotencyKey } });
+    if (existing) return existing;
+    const wallet = await tx.wallet.findUnique({ where: { userId: params.userId } });
+    if (!wallet) throw new InsufficientBalanceError("Carteira não encontrada");
+    await tx.$queryRaw`SELECT id FROM wallets WHERE id = ${wallet.id} FOR UPDATE`;
+    const held = await tx.walletHold.aggregate({
+      where: { walletId: wallet.id, status: "OPEN" },
+      _sum: { amountCents: true },
+    });
+    const available = wallet.balanceCents - (held._sum.amountCents ?? 0);
+    if (available < params.amountCents) {
+      throw new InsufficientBalanceError("Saldo disponível insuficiente para autorizar a recarga.");
+    }
+    const hold = await tx.walletHold.create({
+      data: {
+        walletId: wallet.id,
+        sessionId: params.sessionId,
+        amountCents: params.amountCents,
+        status: "OPEN",
+        idempotencyKey: params.idempotencyKey,
+      },
+    });
+    this.audit.info("wallet.hold_created", {
+      userId: params.userId,
+      sessionId: params.sessionId,
+      amountCents: params.amountCents,
+    });
+    return hold;
+  }
+
+  async captureHold(
+    tx: Prisma.TransactionClient,
+    params: { sessionId: string; amountCents: number },
+  ) {
+    const hold = await tx.walletHold.findUnique({ where: { sessionId: params.sessionId } });
+    if (!hold) return null;
+    if (hold.status !== "OPEN") return hold;
+    const capture = Math.max(0, Math.min(params.amountCents, hold.amountCents));
+    const release = hold.amountCents - capture;
+    if (capture > 0) {
+      const wallet = await tx.wallet.findUniqueOrThrow({ where: { id: hold.walletId } });
+      await this.debitForSession(tx, {
+        userId: wallet.userId,
+        sessionId: params.sessionId,
+        amountCents: capture,
+        description: "Cobrança final da recarga",
+        idempotencyKey: `billing-capture-${params.sessionId}`,
+      });
+    }
+    const updated = await tx.walletHold.update({
+      where: { id: hold.id },
+      data: { capturedCents: capture, releasedCents: release, status: "CAPTURED" },
+    });
+    this.audit.info("wallet.hold_released", {
+      sessionId: params.sessionId,
+      capturedCents: capture,
+      releasedCents: release,
+    });
+    this.audit.info("wallet.debited", { sessionId: params.sessionId, amountCents: capture });
+    return updated;
+  }
+
+  async releaseHold(tx: Prisma.TransactionClient, sessionId: string) {
+    const hold = await tx.walletHold.findUnique({ where: { sessionId } });
+    if (!hold || hold.status !== "OPEN") return hold;
+    const updated = await tx.walletHold.update({
+      where: { id: hold.id },
+      data: { status: "RELEASED", releasedCents: hold.amountCents },
+    });
+    this.audit.info("wallet.hold_released", { sessionId, releasedCents: hold.amountCents });
+    return updated;
   }
 
   async debitForSession(

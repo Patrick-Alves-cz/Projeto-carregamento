@@ -74,6 +74,23 @@ export function sessionStatusLabel(status: string) {
   return SESSION_STATUS[status] ?? status;
 }
 
+export function paymentStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    PENDING: "Aguardando pagamento",
+    AUTHORIZED: "Pagamento aprovado",
+    PROCESSING: "Processando",
+    CONFIRMED: "Pagamento aprovado",
+    COMPLETED: "Pagamento concluído",
+    FAILED: "Pagamento falhou",
+    CANCELLED: "Cancelado",
+    EXPIRED: "Expirado",
+    REFUND_PENDING: "Estorno em andamento",
+    REFUNDED: "Estornado",
+    PARTIALLY_REFUNDED: "Estorno parcial",
+  };
+  return labels[status] ?? status;
+}
+
 export function accessTypeLabel(value: string) {
   return ACCESS_TYPE[value] ?? value;
 }

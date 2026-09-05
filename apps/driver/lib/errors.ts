@@ -24,6 +24,12 @@ export function driverErrorMessage(error: unknown): string {
     if (error.code === "INSUFFICIENT_BALANCE") {
       return "Adicione saldo para iniciar a recarga.";
     }
+    if (error.code === "PAYMENT_FAILED") {
+      return "Não foi possível autorizar o pagamento. Tente outro método.";
+    }
+    if (error.code === "PAYMENT_REQUIRES_ACTION") {
+      return "Confirme o pagamento para iniciar a recarga.";
+    }
     if (error.code === "SESSION_STATE_ERROR") {
       return "Você já possui uma recarga em andamento.";
     }

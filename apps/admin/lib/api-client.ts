@@ -539,18 +539,64 @@ export async function listReconciliation() {
   >("/operations/reconciliation");
 }
 
-export async function listOpsPayments() {
+export async function listOpsPayments(query?: {
+  status?: string;
+  method?: string;
+  provider?: string;
+  stationId?: string;
+  companyId?: string;
+  from?: string;
+  to?: string;
+}) {
+  const params = new URLSearchParams();
+  if (query?.status) params.set("status", query.status);
+  if (query?.method) params.set("method", query.method);
+  if (query?.provider) params.set("provider", query.provider);
+  if (query?.stationId) params.set("stationId", query.stationId);
+  if (query?.companyId) params.set("companyId", query.companyId);
+  if (query?.from) params.set("from", query.from);
+  if (query?.to) params.set("to", query.to);
+  const qs = params.toString();
   return apiFetch<
     Array<{
       id: string;
       amountCents: number;
       method: string;
-      status?: string;
       kind?: string;
+      status?: string;
+      provider?: string;
+      providerRef?: string | null;
       createdAt: string;
-      session: { connector: { charger: { station: { name: string } } }; user: { profile: { fullName: string } | null } } | null;
+      confirmedAt?: string | null;
+      refundedAmountCents?: number;
+      refundReason?: string | null;
+      session: {
+        id: string;
+        connector: { charger: { station: { name: string } } };
+        user: { profile: { fullName: string } | null };
+      } | null;
     }>
-  >("/payments");
+  >(`/payments${qs ? `?${qs}` : ""}`);
+}
+
+export async function refundPayment(id: string, reason: string) {
+  return apiFetch(`/payments/${id}/refund`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function listFinanceReconciliation() {
+  return apiFetch<
+    Array<{
+      id: string;
+      reason: string;
+      status: string;
+      detectedAt: string;
+      payment: { id: string; status: string; amountCents: number; provider: string } | null;
+      session: { id: string; status: string; billingStatus: string; costCents: number } | null;
+    }>
+  >("/finance/reconciliation");
 }
 
 export async function getFinanceSummary() {

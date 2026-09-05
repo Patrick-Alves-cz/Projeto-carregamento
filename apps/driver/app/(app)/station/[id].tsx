@@ -17,10 +17,12 @@ import {
   getStation,
   joinWaitlist,
   listFavorites,
+  listPaymentMethods,
   listVehicles,
   quoteTariff,
   removeFavorite,
   startSession,
+  type SavedPaymentMethod,
   type Station,
   type Vehicle,
 } from "../../../lib/api-client";
@@ -64,18 +66,29 @@ export default function StationDetailScreen() {
   const [favorite, setFavorite] = useState(false);
   const [quote, setQuote] = useState<{ totalCents: number; demoPayments: boolean } | null>(null);
   const [confirm, setConfirm] = useState<{ chargerId: string; connectorId: string } | null>(null);
+  const [paymentKind, setPaymentKind] = useState<"WALLET" | "PIX" | "CARD">("WALLET");
+  const [methods, setMethods] = useState<SavedPaymentMethod[]>([]);
+  const [paymentMethodId, setPaymentMethodId] = useState<string | undefined>();
 
   const selectedVehicle = vehicles.find((item) => item.id === vehicleId) ?? vehicles.find((item) => item.isDefault) ?? vehicles[0];
 
+  useEffect(() => {
+    if (paymentMethodId) return;
+    const def = methods.find((item) => item.isDefault) ?? methods[0];
+    if (def) setPaymentMethodId(def.id);
+  }, [methods, paymentMethodId]);
+
   const load = useCallback(async () => {
     if (!id) return;
-    const [stationData, vehicleData, favs] = await Promise.all([
+    const [stationData, vehicleData, favs, cards] = await Promise.all([
       getStation(id, selectedVehicle?.id ?? vehicleId),
       listVehicles(),
       listFavorites().catch(() => []),
+      listPaymentMethods().catch(() => []),
     ]);
     setStation(stationData);
     setVehicles(vehicleData);
+    setMethods(cards);
     setFavorite(favs.some((item) => item.stationId === id));
     if (!vehicleId) {
       const fallback = vehicleData.find((item) => item.isDefault) ?? vehicleData[0];
@@ -118,7 +131,10 @@ export default function StationDetailScreen() {
     if (!confirmConnector || !selectedVehicle) return;
     setStarting(true);
     try {
-      const session = await startSession(confirmConnector.id, selectedVehicle.id, { paymentKind: "WALLET" });
+      const session = await startSession(confirmConnector.id, selectedVehicle.id, {
+        paymentKind,
+        paymentMethodId: paymentKind === "CARD" ? paymentMethodId : undefined,
+      });
       setConfirm(null);
       router.push(`/charging/${session.id}` as Href);
     } catch (err: unknown) {
@@ -386,7 +402,37 @@ export default function StationDetailScreen() {
                 {quote.demoPayments ? " · DEMO" : ""}
               </Text>
             ) : null}
-            <Text style={styles.modalLine}>Pagamento: carteira do motorista</Text>
+            <Text style={styles.modalLine}>Método de pagamento</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+              {(["WALLET", "PIX", "CARD"] as const).map((kind) => (
+                <Pressable
+                  key={kind}
+                  onPress={() => setPaymentKind(kind)}
+                  style={[styles.secondaryCta, paymentKind === kind && styles.connectorReady]}
+                >
+                  <Text style={styles.secondaryCtaText}>
+                    {kind === "WALLET" ? "Carteira" : kind === "PIX" ? "PIX (saldo)" : "Cartão"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {paymentKind === "PIX" ? (
+              <Text style={styles.meta}>PIX recarrega a carteira. A sessão usa o saldo disponível.</Text>
+            ) : null}
+            {paymentKind === "CARD" ? (
+              methods.length ? (
+                methods.map((method) => (
+                  <Pressable key={method.id} onPress={() => setPaymentMethodId(method.id)}>
+                    <Text style={styles.modalLine}>
+                      {paymentMethodId === method.id ? "● " : "○ "}
+                      {method.brand.toUpperCase()} •••• {method.last4}
+                    </Text>
+                  </Pressable>
+                ))
+              ) : (
+                <Text style={styles.error}>Adicione um cartão tokenizado na carteira.</Text>
+              )
+            ) : null}
             <Text style={styles.modalLine}>
               Veículo: {selectedVehicle ? `${selectedVehicle.brand} ${selectedVehicle.model}` : "Não selecionado"}
             </Text>

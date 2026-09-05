@@ -32,6 +32,21 @@ async function main() {
   await prisma.ocppTransaction.deleteMany({});
   await prisma.chargerEvent.deleteMany({});
   await prisma.chargerCredential.deleteMany({});
+  await prisma.paymentReconciliationCase.deleteMany({
+    where: { company: { slug: { in: COMPANY_SLUGS } } },
+  });
+  await prisma.incident.deleteMany({
+    where: { company: { slug: { in: COMPANY_SLUGS } } },
+  });
+  await prisma.maintenanceWindow.deleteMany({
+    where: { company: { slug: { in: COMPANY_SLUGS } } },
+  });
+  await prisma.walletHold.deleteMany({
+    where: { wallet: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
+  await prisma.paymentAuthorization.deleteMany({
+    where: { session: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
   await prisma.inAppNotification.deleteMany({
     where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });

@@ -1,6 +1,8 @@
 # Pagamentos
 
-A Fase 5 desacopla cobrança da carteira DEMO. O domínio fala com `PaymentProvider`. Nenhum frontend confirma pagamento ou calcula o total final.
+A Fase 5 desacoplou a carteira DEMO. A Fase 7 adiciona gateway sandbox (Asaas), hold, capture e reconciliação. Ver [payment-provider.md](payment-provider.md) e [billing.md](billing.md).
+
+O domínio fala com `PaymentProvider`. Nenhum frontend confirma pagamento ou calcula o total final.
 
 ## Arquitetura
 

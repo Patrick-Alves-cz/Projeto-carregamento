@@ -3,11 +3,23 @@ export type PaymentKind = "PIX" | "CARD" | "WALLET";
 export type ProviderPaymentStatus =
   | "PENDING"
   | "AUTHORIZED"
+  | "PROCESSING"
   | "CONFIRMED"
   | "FAILED"
   | "CANCELLED"
   | "REFUNDED"
+  | "PARTIALLY_REFUNDED"
+  | "REFUND_PENDING"
   | "EXPIRED";
+
+export type PaymentProviderCapabilities = {
+  supportsPix: boolean;
+  supportsCard: boolean;
+  supportsCardPreAuthorization: boolean;
+  supportsRefund: boolean;
+  supportsSavedPaymentMethod: boolean;
+  supportsWebhookSignature: boolean;
+};
 
 export interface CreatePaymentInput {
   amountCents: number;
@@ -17,6 +29,7 @@ export interface CreatePaymentInput {
   customerRef: string;
   paymentMethodToken?: string;
   description?: string;
+  authorizeOnly?: boolean;
 }
 
 export interface ProviderPayment {
@@ -38,9 +51,23 @@ export interface TokenizedCard {
   expYear: number;
 }
 
+export interface ParsedWebhook {
+  eventId: string;
+  eventType: string;
+  providerRef?: string;
+  status: ProviderPaymentStatus;
+  amountCents?: number;
+  currency?: string;
+}
+
 export interface PaymentProvider {
   readonly name: string;
+  readonly capabilities: PaymentProviderCapabilities;
   createPayment(input: CreatePaymentInput): Promise<ProviderPayment>;
+  createPixPayment?(input: CreatePaymentInput): Promise<ProviderPayment>;
+  createCardPayment?(input: CreatePaymentInput): Promise<ProviderPayment>;
+  authorizeCard?(input: CreatePaymentInput): Promise<ProviderPayment>;
+  capturePayment?(providerRef: string, amountCents?: number): Promise<ProviderPayment>;
   getPaymentStatus(providerRef: string): Promise<ProviderPayment>;
   cancelPayment(providerRef: string): Promise<ProviderPayment>;
   refundPayment(providerRef: string, amountCents?: number): Promise<ProviderPayment>;
@@ -49,7 +76,9 @@ export interface PaymentProvider {
     last4: string;
     expMonth: number;
     expYear: number;
+    token?: string;
   }): Promise<TokenizedCard>;
+  parseWebhook?(headers: Record<string, string | undefined>, body: unknown): ParsedWebhook;
 }
 
 export interface PixPaymentProvider extends PaymentProvider {

@@ -1,17 +1,22 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenState } from "../../../components/screen-state";
 import {
   createPayment,
+  createPaymentMethod,
+  getPayment,
   getWallet,
+  listMyPayments,
+  listPaymentMethods,
   listWalletTransactions,
   simulatePayment,
   topUpWallet,
   type PaymentView,
+  type SavedPaymentMethod,
   type Wallet,
   type WalletTransaction,
 } from "../../../lib/api-client";
-import { formatCurrency, walletKindLabel } from "../../../lib/labels";
+import { formatCurrency, paymentStatusLabel, walletKindLabel } from "../../../lib/labels";
 import { driverErrorMessage } from "../../../lib/errors";
 import { colors, radius } from "../../../lib/theme";
 import { useFocusEffect } from "expo-router";
@@ -21,6 +26,8 @@ const PRESETS = [2000, 5000, 10000, 20000];
 export default function WalletScreen() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [items, setItems] = useState<WalletTransaction[]>([]);
+  const [payments, setPayments] = useState<PaymentView[]>([]);
+  const [methods, setMethods] = useState<SavedPaymentMethod[]>([]);
   const [custom, setCustom] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -28,9 +35,16 @@ export default function WalletScreen() {
   const [pendingPix, setPendingPix] = useState<PaymentView | null>(null);
 
   const load = useCallback(async () => {
-    const [mine, txs] = await Promise.all([getWallet(), listWalletTransactions()]);
+    const [mine, txs, minePayments, cards] = await Promise.all([
+      getWallet(),
+      listWalletTransactions(),
+      listMyPayments().catch(() => []),
+      listPaymentMethods().catch(() => []),
+    ]);
     setWallet(mine);
     setItems(txs.items);
+    setPayments(minePayments);
+    setMethods(cards);
   }, []);
 
   useFocusEffect(
@@ -40,6 +54,21 @@ export default function WalletScreen() {
         .finally(() => setLoading(false));
     }, [load]),
   );
+
+  useEffect(() => {
+    if (!pendingPix || pendingPix.status !== "PENDING") return;
+    const timer = setInterval(() => {
+      void getPayment(pendingPix.id)
+        .then((payment) => {
+          setPendingPix(payment);
+          if (payment.status === "CONFIRMED" || payment.status === "COMPLETED") {
+            void load();
+          }
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [pendingPix, load]);
 
   async function startPix(amountCents: number) {
     setBusy(true);
@@ -55,14 +84,12 @@ export default function WalletScreen() {
   }
 
   async function confirmPix() {
-    if (!pendingPix) return;
+    if (!pendingPix || !pendingPix.demo) return;
     setBusy(true);
     try {
       await simulatePayment(pendingPix.id, "CONFIRMED");
       setPendingPix(null);
-      const [mine, txs] = await Promise.all([getWallet(), listWalletTransactions()]);
-      setWallet(mine);
-      setItems(txs.items);
+      await load();
     } catch (err: unknown) {
       setError(driverErrorMessage(err));
     } finally {
@@ -76,8 +103,25 @@ export default function WalletScreen() {
     try {
       const result = await topUpWallet(amountCents);
       setWallet(result.wallet);
-      const txs = await listWalletTransactions();
-      setItems(txs.items);
+      await load();
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addDemoCard() {
+    setBusy(true);
+    try {
+      await createPaymentMethod({
+        brand: "visa",
+        last4: "4242",
+        expMonth: 12,
+        expYear: 2030,
+        isDefault: methods.length === 0,
+      });
+      await load();
     } catch (err: unknown) {
       setError(driverErrorMessage(err));
     } finally {
@@ -96,24 +140,35 @@ export default function WalletScreen() {
 
   if (loading) return <ScreenState message="Carregando carteira…" />;
 
+  const available = wallet?.availableCents ?? wallet?.balanceCents ?? 0;
+  const held = wallet?.heldCents ?? 0;
+
   return (
     <View style={styles.screen}>
       <View style={styles.balanceCard}>
-        <Text style={styles.kicker}>Saldo atual</Text>
-        <Text style={styles.balance}>{formatCurrency(wallet?.balanceCents ?? 0)}</Text>
-        <Text style={styles.hint}>Ambiente DEMO · PIX e cartão simulados, sem gateway real</Text>
+        <Text style={styles.kicker}>Saldo disponível</Text>
+        <Text style={styles.balance}>{formatCurrency(available)}</Text>
+        <Text style={styles.hint}>
+          Total {formatCurrency(wallet?.balanceCents ?? 0)}
+          {held > 0 ? ` · reservado ${formatCurrency(held)}` : ""}
+        </Text>
       </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {pendingPix ? (
         <View style={styles.pixBox}>
-          <Text style={styles.pixTitle}>PIX DEMO pendente</Text>
-          <Text style={styles.pixCopy}>{pendingPix.pixCopyPaste ?? "Código PIX gerado no ambiente DEMO"}</Text>
-          <Pressable disabled={busy} onPress={() => void confirmPix()} style={styles.preset}>
-            <Text style={styles.presetText}>Simular pagamento confirmado</Text>
-          </Pressable>
+          <Text style={styles.pixTitle}>{paymentStatusLabel(pendingPix.status)}</Text>
+          <Text style={styles.pixCopy}>{pendingPix.pixCopyPaste ?? pendingPix.pixQrPayload ?? "Código PIX gerado"}</Text>
+          <Text style={styles.hint}>Copia e cola · {formatCurrency(pendingPix.amountCents)}</Text>
+          {pendingPix.demo ? (
+            <Pressable disabled={busy} onPress={() => void confirmPix()} style={styles.preset}>
+              <Text style={styles.presetText}>Simular pagamento confirmado</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.hint}>Aguardando confirmação do pagamento.</Text>
+          )}
         </View>
       ) : null}
-      <Text style={styles.section}>Adicionar via PIX DEMO</Text>
+      <Text style={styles.section}>Adicionar via PIX</Text>
       <View style={styles.presets}>
         {PRESETS.map((amount) => (
           <Pressable disabled={busy} key={amount} onPress={() => void startPix(amount)} style={styles.preset}>
@@ -142,11 +197,34 @@ export default function WalletScreen() {
           <Text style={styles.customBtnText}>Adicionar</Text>
         </Pressable>
       </View>
+      <Text style={styles.section}>Cartões</Text>
+      {methods.map((method) => (
+        <Text key={method.id} style={styles.meta}>
+          {method.brand.toUpperCase()} •••• {method.last4}
+          {method.isDefault ? " · padrão" : ""}
+        </Text>
+      ))}
+      <Pressable disabled={busy} onPress={() => void addDemoCard()} style={[styles.preset, { marginBottom: 12 }]}>
+        <Text style={styles.presetText}>Adicionar cartão tokenizado DEMO</Text>
+      </Pressable>
+      <Text style={styles.section}>Pagamentos</Text>
+      {payments.slice(0, 8).map((payment) => (
+        <View key={payment.id} style={styles.tx}>
+          <View style={styles.txRow}>
+            <Text style={styles.txKind}>{payment.kind}</Text>
+            <Text style={styles.txAmount}>{formatCurrency(payment.amountCents)}</Text>
+          </View>
+          <Text style={styles.meta}>
+            {paymentStatusLabel(payment.status)} · {new Date(payment.createdAt).toLocaleString("pt-BR")}
+          </Text>
+        </View>
+      ))}
       <FlatList
         contentContainerStyle={styles.list}
         data={items}
         keyExtractor={(item) => item.id}
         ListEmptyComponent={<Text style={styles.empty}>Nenhuma transação ainda.</Text>}
+        ListHeaderComponent={<Text style={styles.section}>Movimentações</Text>}
         renderItem={({ item }) => {
           const credit = item.amountCents >= 0;
           return (
@@ -184,7 +262,7 @@ const styles = StyleSheet.create({
   balance: { color: colors.text, fontSize: 32, fontWeight: "700", marginTop: 8 },
   hint: { color: colors.muted, fontSize: 12, marginTop: 6 },
   error: { color: colors.danger, marginBottom: 8 },
-  section: { color: colors.muted, fontSize: 12, fontWeight: "700", marginBottom: 8 },
+  section: { color: colors.muted, fontSize: 12, fontWeight: "700", marginBottom: 8, marginTop: 8 },
   pixBox: {
     backgroundColor: colors.card,
     borderColor: colors.amber,
@@ -231,11 +309,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
+    marginBottom: 8,
     padding: 12,
   },
   txRow: { flexDirection: "row", justifyContent: "space-between" },
   txKind: { color: colors.text, fontWeight: "700" },
-  txAmount: { fontWeight: "700" },
+  txAmount: { fontWeight: "700", color: colors.text },
   credit: { color: colors.available },
   debit: { color: colors.danger },
   meta: { color: colors.muted, fontSize: 12, marginTop: 2 },

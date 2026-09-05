@@ -146,6 +146,19 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
           },
         });
 
+        const hold = await tx.walletHold.findUnique({ where: { sessionId: session.id } });
+        const auth = await tx.paymentAuthorization.findUnique({ where: { sessionId: session.id } });
+        const prepaid = hold?.status === "OPEN" || auth?.status === "AUTHORIZED";
+        const limitCents = hold?.amountCents ?? auth?.authorizedAmountCents ?? 0;
+        if (prepaid && limitCents > 0 && costCents > limitCents) {
+          await this.forceStopSession(tx, session.id, SessionStopReason.INSUFFICIENT_BALANCE);
+          throw new InsufficientBalanceError("O valor autorizado da recarga foi atingido.");
+        }
+        if (prepaid) {
+          remainingAfter = session.user.wallet?.balanceCents ?? remainingAfter;
+          return;
+        }
+
         if (deltaCents > 0) {
           try {
             remainingAfter = await this.walletService.debitForSession(tx, {

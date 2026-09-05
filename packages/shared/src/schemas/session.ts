@@ -17,6 +17,7 @@ export const startSessionSchema = z.object({
   vehicleId: z.string().cuid(),
   reservationId: z.string().cuid().optional(),
   paymentKind: z.enum(["WALLET", "PIX", "CARD"]).optional(),
+  paymentMethodId: z.string().cuid().optional(),
   idempotencyKey: z.string().min(8).max(128).optional(),
 });
 

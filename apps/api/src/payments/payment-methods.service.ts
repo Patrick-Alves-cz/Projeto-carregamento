@@ -49,6 +49,7 @@ export class PaymentMethodsService {
       last4: input.last4,
       expMonth: input.expMonth,
       expYear: input.expYear,
+      token: input.token,
     });
     const count = await this.prisma.paymentMethod.count({ where: { userId: user.id, status: "ACTIVE" } });
     const method = await this.prisma.paymentMethod.create({

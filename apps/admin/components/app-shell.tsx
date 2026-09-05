@@ -49,6 +49,7 @@ const NAV = [
   { href: "/dashboard/chargers", label: "Carregadores", icon: PlugZap },
   { href: "/dashboard/tariffs", label: "Tarifas", icon: Wallet },
   { href: "/dashboard/payments", label: "Pagamentos", icon: Receipt },
+  { href: "/dashboard/finance/reconciliation", label: "Financeiro", icon: Wallet },
   { href: "/dashboard/payment-methods", label: "Métodos", icon: Wallet },
   { href: "/dashboard/reservations", label: "Reservas", icon: Users },
   { href: "/dashboard/waitlist", label: "Fila", icon: Users },

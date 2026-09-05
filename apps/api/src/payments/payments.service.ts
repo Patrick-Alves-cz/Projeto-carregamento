@@ -1,9 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import {
-  ForbiddenError,
-  NotFoundError,
-  ValidationError,
-} from "@evcharge/domain";
+import { ForbiddenError, isPaidStatus, mapProviderPaymentStatus, NotFoundError, toPrismaPaymentStatus, ValidationError } from "@evcharge/domain";
 import type { CreatePaymentInput, SimulatePaymentInput } from "@evcharge/shared";
 import {
   MockPaymentProvider,
@@ -19,6 +15,7 @@ import { TenantAccessService } from "../common/services/tenant-access.service";
 import { WalletService } from "../wallet/wallet.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { ChargingEventsService } from "../charging/charging-events.service";
+import { PaymentReconciliationService } from "./payment-reconciliation.service";
 
 const SUCCESS_STATUSES: PaymentStatus[] = [PaymentStatus.CONFIRMED, PaymentStatus.COMPLETED];
 
@@ -33,12 +30,22 @@ export class PaymentsService {
     private readonly notifications: NotificationsService,
     private readonly events: ChargingEventsService,
     private readonly tenant: TenantAccessService,
+    private readonly recon: PaymentReconciliationService,
   ) {
     this.provider = PaymentProviderFactory.create(process.env.PAYMENT_PROVIDER ?? "mock");
   }
 
   isDemo() {
     return this.provider.name === "mock";
+  }
+
+  capabilities() {
+    return {
+      provider: this.provider.name,
+      environment: process.env.PAYMENT_ENVIRONMENT ?? "sandbox",
+      demo: this.isDemo(),
+      ...this.provider.capabilities,
+    };
   }
 
   async create(user: AuthenticatedUser, input: CreatePaymentInput & { idempotencyKey?: string }) {
@@ -68,6 +75,7 @@ export class PaymentsService {
       customerRef: user.id,
       paymentMethodToken,
       description: "Crédito de carteira EV Charge",
+      authorizeOnly: kind === "CARD" ? false : undefined,
     });
 
     const payment = await this.prisma.payment.create({
@@ -75,7 +83,7 @@ export class PaymentsService {
         userId: user.id,
         amountCents: input.amountCents,
         currency: "BRL",
-        status: charge.status as PaymentStatus,
+        status: PaymentStatus.PENDING,
         method: kind === "WALLET" ? "WALLET_DEMO" : kind,
         kind,
         provider: charge.provider,
@@ -104,8 +112,8 @@ export class PaymentsService {
       payload: { paymentId: payment.id, userId: user.id, amountCents: payment.amountCents, kind },
     });
 
-    if (kind === "CARD" && charge.status === "AUTHORIZED") {
-      return this.confirmInternal(payment.id, "AUTHORIZED");
+    if (kind !== "PIX" && (charge.status === "CONFIRMED" || charge.status === "AUTHORIZED")) {
+      return this.confirmInternal(payment.id, charge.status);
     }
     return this.toView(payment, false);
   }
@@ -133,7 +141,15 @@ export class PaymentsService {
 
   async listAdmin(
     user: AuthenticatedUser,
-    query: { status?: PaymentStatus; stationId?: string; from?: Date; to?: Date; method?: string },
+    query: {
+      status?: PaymentStatus;
+      stationId?: string;
+      from?: Date;
+      to?: Date;
+      method?: string;
+      provider?: string;
+      companyId?: string;
+    },
   ) {
     this.tenant.assertOperatorOrAbove(user);
     const where: Prisma.PaymentWhereInput = {};
@@ -149,6 +165,11 @@ export class PaymentsService {
     }
     if (query.status) where.status = query.status;
     if (query.method) where.method = query.method;
+    if (query.provider) where.provider = query.provider;
+    if (query.companyId) {
+      this.tenant.assertCompanyAccess(user, query.companyId);
+      where.companyId = query.companyId;
+    }
     if (query.stationId) {
       where.session = {
         connector: { charger: { stationId: query.stationId } },
@@ -187,7 +208,9 @@ export class PaymentsService {
     paymentId?: string;
     providerRef?: string;
     status: PaymentStatus;
+    amountCents?: number;
   }) {
+    this.audit.info("webhook.received", { provider, eventType: body.eventType, eventId: body.eventId });
     const existingEvent = await this.prisma.paymentWebhookEvent.findUnique({
       where: { provider_externalEventId: { provider, externalEventId: body.eventId } },
     });
@@ -200,8 +223,10 @@ export class PaymentsService {
         provider,
         externalEventId: body.eventId,
         eventType: body.eventType,
-        payload: { eventType: body.eventType, status: body.status, paymentId: body.paymentId },
+        providerPaymentId: body.providerRef,
+        payload: { eventType: body.eventType, status: body.status, amountCents: body.amountCents },
         paymentId: body.paymentId,
+        status: "RECEIVED",
       },
     });
 
@@ -210,14 +235,102 @@ export class PaymentsService {
       : body.providerRef
         ? await this.prisma.payment.findFirst({ where: { provider, providerRef: body.providerRef } })
         : null;
-    if (!payment) throw new NotFoundError("Payment", body.paymentId ?? body.providerRef ?? "unknown");
+    if (!payment) {
+      await this.prisma.paymentWebhookEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorSanitized: "payment_not_found" },
+      });
+      throw new NotFoundError("Payment", body.paymentId ?? body.providerRef ?? "unknown");
+    }
 
-    const result = await this.applyStatus(payment.id, body.status, body.eventId);
+    let status = toDbPaymentStatus(body.status);
+    let remoteAmount = body.amountCents;
+    if (provider === "asaas" && payment.providerRef) {
+      try {
+        const remote = await this.provider.getPaymentStatus(payment.providerRef);
+        status = toDbPaymentStatus(remote.status);
+        remoteAmount = remote.amountCents;
+      } catch {
+        this.audit.warn("webhook.failed", { paymentId: payment.id, reason: "provider_status_unavailable" });
+      }
+    }
+    if (typeof remoteAmount === "number" && remoteAmount !== payment.amountCents) {
+      if (payment.companyId) {
+        await this.recon.openCase({
+          companyId: payment.companyId,
+          paymentId: payment.id,
+          reason: "AMOUNT_MISMATCH",
+          details: { expected: payment.amountCents, received: remoteAmount },
+        });
+      }
+      await this.prisma.paymentWebhookEvent.update({
+        where: { id: event.id },
+        data: { status: "FAILED", errorSanitized: "amount_mismatch", processedAt: new Date(), paymentId: payment.id },
+      });
+      return { replayed: false, paymentId: payment.id, status: payment.status, rejected: "amount_mismatch" };
+    }
+
+    const result = await this.applyStatus(payment.id, status, body.eventId);
     await this.prisma.paymentWebhookEvent.update({
       where: { id: event.id },
-      data: { processedAt: new Date(), paymentId: payment.id },
+      data: { processedAt: new Date(), paymentId: payment.id, status: "PROCESSED" },
     });
+    this.audit.info("webhook.processed", { paymentId: payment.id, eventId: body.eventId, status: result.status });
     return { replayed: false, paymentId: result.id, status: result.status };
+  }
+
+  async refund(
+    user: AuthenticatedUser,
+    id: string,
+    input: { reason: string; amountCents?: number; idempotencyKey?: string },
+  ) {
+    this.tenant.assertOperatorOrAbove(user);
+    const payment = await this.prisma.payment.findUnique({ where: { id } });
+    if (!payment) throw new NotFoundError("Payment", id);
+    if (payment.companyId) this.tenant.assertCompanyAccess(user, payment.companyId);
+    const key = input.idempotencyKey ?? `refund-${id}`;
+    if (payment.refundIdempotencyKey === key && (payment.status === PaymentStatus.REFUNDED || payment.status === PaymentStatus.REFUND_PENDING)) {
+      return this.toView(payment, true);
+    }
+    if (!isPaidStatus(payment.status) && payment.status !== PaymentStatus.AUTHORIZED) {
+      throw new ValidationError("Somente pagamentos confirmados podem ser estornados");
+    }
+    this.audit.info("payment.refund_requested", { paymentId: id, userId: user.id, reason: input.reason });
+    await this.prisma.payment.update({
+      where: { id },
+      data: {
+        status: PaymentStatus.REFUND_PENDING,
+        refundReason: input.reason,
+        refundRequestedAt: new Date(),
+        refundIdempotencyKey: key,
+      },
+    });
+    if (payment.providerRef && this.provider.capabilities.supportsRefund) {
+      const refunded = await this.provider.refundPayment(payment.providerRef, input.amountCents);
+      const next =
+        refunded.status === "PARTIALLY_REFUNDED" ? PaymentStatus.PARTIALLY_REFUNDED : PaymentStatus.REFUNDED;
+      if (payment.walletCredited) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.wallet.debitForSession(tx, {
+            userId: payment.userId,
+            sessionId: payment.sessionId,
+            amountCents: input.amountCents ?? payment.amountCents,
+            description: `Estorno ${id.slice(-6)}`,
+            idempotencyKey: `refund-debit-${id}`,
+          });
+        });
+      }
+      const updated = await this.prisma.payment.update({
+        where: { id },
+        data: {
+          status: next,
+          refundedAmountCents: input.amountCents ?? payment.amountCents,
+        },
+      });
+      this.audit.info("payment.refunded", { paymentId: id, amountCents: updated.refundedAmountCents });
+      return this.toView(updated, false);
+    }
+    return this.applyStatus(id, PaymentStatus.REFUNDED, key);
   }
 
   async expireDue() {
@@ -257,6 +370,9 @@ export class PaymentsService {
       if (SUCCESS_STATUSES.includes(next)) data.confirmedAt = new Date();
       if (next === PaymentStatus.CANCELLED || next === PaymentStatus.EXPIRED) data.cancelledAt = new Date();
       if (next === PaymentStatus.FAILED) data.failureCode = "PROVIDER_FAILED";
+      if (next === PaymentStatus.REFUNDED || next === PaymentStatus.PARTIALLY_REFUNDED) {
+        data.refundedAmountCents = payment.amountCents;
+      }
 
       const updated = await tx.payment.update({ where: { id: paymentId }, data });
 
@@ -279,10 +395,34 @@ export class PaymentsService {
         });
       }
 
+      if (
+        (next === PaymentStatus.REFUNDED || next === PaymentStatus.PARTIALLY_REFUNDED) &&
+        payment.walletCredited
+      ) {
+        await this.wallet.debitForSession(tx, {
+          userId: payment.userId,
+          sessionId: payment.sessionId,
+          amountCents: payment.amountCents,
+          description: `Estorno ${payment.id.slice(-6)}`,
+          idempotencyKey: `refund-debit-${payment.id}`,
+        });
+      } else if (
+        (next === PaymentStatus.REFUNDED || next === PaymentStatus.PARTIALLY_REFUNDED) &&
+        payment.sessionId &&
+        !payment.walletCredited
+      ) {
+        await this.wallet.creditInTx(tx, {
+          userId: payment.userId,
+          amountCents: payment.amountCents,
+          description: `Estorno da sessão ${payment.sessionId.slice(-6)}`,
+          idempotencyKey: `refund-credit-${payment.id}`,
+        });
+      }
+
       return updated;
     }).then(async (updated) => {
       if (SUCCESS_STATUSES.includes(updated.status)) {
-        this.audit.info("payment.confirmed", { paymentId: updated.id, userId: updated.userId, amountCents: updated.amountCents });
+        this.audit.info("payment.paid", { paymentId: updated.id, userId: updated.userId, amountCents: updated.amountCents });
         await this.notifications.notify({
           userId: updated.userId,
           type: NotificationType.PAYMENT_CONFIRMED,
@@ -292,7 +432,7 @@ export class PaymentsService {
           dedupeKey: `payment-confirmed-${updated.id}`,
         });
         await this.events.publish({
-          type: "payment.confirmed",
+          type: "payment.paid",
           entityType: "payment",
           entityId: updated.id,
           timestamp: new Date(),
@@ -305,9 +445,22 @@ export class PaymentsService {
           userId: updated.userId,
           type: NotificationType.PAYMENT_FAILED,
           title: "Pagamento não confirmado",
-          body: "Não foi possível confirmar este pagamento DEMO.",
+          body: "Não foi possível confirmar este pagamento.",
           payload: { paymentId: updated.id },
           dedupeKey: `payment-failed-${updated.id}`,
+        });
+      }
+      if (updated.status === PaymentStatus.CANCELLED) {
+        this.audit.info("payment.cancelled", { paymentId: updated.id });
+      }
+      if (updated.status === PaymentStatus.REFUNDED || updated.status === PaymentStatus.PARTIALLY_REFUNDED) {
+        this.audit.info("payment.refunded", { paymentId: updated.id, amountCents: updated.refundedAmountCents });
+        await this.events.publish({
+          type: "payment.refunded",
+          entityType: "payment",
+          entityId: updated.id,
+          timestamp: new Date(),
+          payload: { paymentId: updated.id, amountCents: updated.refundedAmountCents },
         });
       }
       return this.toView(updated, false);
@@ -325,9 +478,14 @@ export class PaymentsService {
     method: string;
     kind: string;
     provider: string;
+    providerRef?: string | null;
     pixCopyPaste?: string | null;
     pixQrPayload?: string | null;
     expiresAt?: Date | null;
+    confirmedAt?: Date | null;
+    refundedAmountCents?: number;
+    refundReason?: string | null;
+    sessionId?: string | null;
     createdAt: Date;
   }, replayed: boolean) {
     return {
@@ -340,4 +498,12 @@ export class PaymentsService {
   private assertDriver(user: AuthenticatedUser) {
     if (user.role !== UserRole.DRIVER) throw new ForbiddenError("Somente motoristas criam pagamentos");
   }
+}
+
+function toDbPaymentStatus(raw: string): PaymentStatus {
+  const mapped = toPrismaPaymentStatus(mapProviderPaymentStatus(raw));
+  if ((Object.values(PaymentStatus) as string[]).includes(mapped)) {
+    return mapped as PaymentStatus;
+  }
+  return PaymentStatus.PENDING;
 }

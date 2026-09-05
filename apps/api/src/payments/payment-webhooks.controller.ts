@@ -1,9 +1,9 @@
-import { Body, Controller, Headers, Param, Post, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Headers, Param, Post, UnauthorizedException, BadRequestException } from "@nestjs/common";
 import { ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PaymentStatus } from "@prisma/client";
 import { webhookPaymentSchema } from "@evcharge/shared";
+import { AsaasPaymentProvider } from "@evcharge/payment-provider";
 import { Public } from "../common/decorators/auth.decorators";
-import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { PaymentsService } from "./payments.service";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -17,18 +17,43 @@ export class PaymentWebhooksController {
   @ApiOperation({ summary: "Payment provider webhook. Signature validated when PAYMENT_WEBHOOK_SECRET is set." })
   handle(
     @Param("provider") provider: string,
-    @Body(new ZodValidationPipe(webhookPaymentSchema)) body: unknown,
+    @Body() body: unknown,
     @Headers("x-webhook-signature") signature?: string,
+    @Headers("asaas-access-token") asaasToken?: string,
   ) {
+    if (provider === "asaas") {
+      const asaas = new AsaasPaymentProvider();
+      try {
+        asaas.verifyWebhookToken(
+          { "asaas-access-token": asaasToken },
+          process.env.PAYMENT_WEBHOOK_SECRET,
+        );
+        const parsed = asaas.parseWebhook({}, body);
+        return this.payments.handleWebhook("asaas", {
+          eventId: parsed.eventId,
+          eventType: parsed.eventType,
+          providerRef: parsed.providerRef,
+          status: parsed.status as PaymentStatus,
+          amountCents: parsed.amountCents,
+        });
+      } catch {
+        throw new UnauthorizedException("Invalid Asaas webhook");
+      }
+    }
+
     this.assertSignature(JSON.stringify(body), signature);
-    const input = body as {
-      eventId: string;
-      eventType: string;
-      paymentId?: string;
-      providerRef?: string;
-      status: PaymentStatus;
-    };
-    return this.payments.handleWebhook(provider, input);
+    const parsed = webhookPaymentSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException("Invalid webhook payload");
+    }
+    return this.payments.handleWebhook(provider, {
+      eventId: parsed.data.eventId,
+      eventType: parsed.data.eventType,
+      paymentId: parsed.data.paymentId,
+      providerRef: parsed.data.providerRef,
+      status: parsed.data.status as PaymentStatus,
+      amountCents: parsed.data.amountCents,
+    });
   }
 
   private assertSignature(raw: string, signature?: string) {

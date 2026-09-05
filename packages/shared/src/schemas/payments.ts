@@ -16,7 +16,26 @@ export const webhookPaymentSchema = z.object({
   eventType: z.string().min(3).max(80),
   paymentId: z.string().optional(),
   providerRef: z.string().optional(),
-  status: z.enum(["PENDING", "AUTHORIZED", "CONFIRMED", "FAILED", "CANCELLED", "REFUNDED", "EXPIRED"]),
+  amountCents: z.number().int().positive().optional(),
+  status: z.enum([
+    "PENDING",
+    "AUTHORIZED",
+    "PROCESSING",
+    "CONFIRMED",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "REFUNDED",
+    "EXPIRED",
+    "REFUND_PENDING",
+    "PARTIALLY_REFUNDED",
+  ]),
+});
+
+export const refundPaymentSchema = z.object({
+  reason: z.string().min(5).max(500),
+  amountCents: z.number().int().positive().optional(),
+  idempotencyKey: z.string().min(8).max(80).optional(),
 });
 
 export const createPaymentMethodSchema = z.object({
@@ -25,6 +44,7 @@ export const createPaymentMethodSchema = z.object({
   expMonth: z.number().int().min(1).max(12),
   expYear: z.number().int().min(2024).max(2100),
   isDefault: z.boolean().optional(),
+  token: z.string().min(8).max(256).optional(),
 });
 
 export const createReservationSchema = z.object({
@@ -55,6 +75,7 @@ export const estimateCostSchema = z.object({
 
 export type CreatePaymentInput = z.infer<typeof createPaymentSchema>;
 export type SimulatePaymentInput = z.infer<typeof simulatePaymentSchema>;
+export type RefundPaymentInput = z.infer<typeof refundPaymentSchema>;
 export type CreatePaymentMethodInput = z.infer<typeof createPaymentMethodSchema>;
 export type CreateReservationInput = z.infer<typeof createReservationSchema>;
 export type JoinWaitlistInput = z.infer<typeof joinWaitlistSchema>;

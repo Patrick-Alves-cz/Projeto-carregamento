@@ -104,7 +104,7 @@ packages/
   domain/               # Regras de negócio e erros de domínio
   database/             # Prisma schema e client
   charger-provider/     # Abstração ChargerProvider (Mock + OCPP)
-  payment-provider/     # Abstração PaymentProvider (mock DEMO)
+  payment-provider/     # PaymentProvider (Mock + Asaas sandbox)
   ocpp/                 # Framing, schemas e mappers OCPP 1.6J
   shared/               # Schemas Zod, tipos e constantes
   ui/                   # Componentes UI compartilhados
@@ -169,17 +169,23 @@ Documentação interativa: **http://localhost:3001/api/docs**
 WebSocket frontend: `ws://localhost:3001/realtime` (JWT no `auth.token`)  
 WebSocket OCPP: `ws://localhost:3001/ocpp/{identity}` (subprotocolo `ocpp1.6`, Basic auth de equipamento)
 
-### Pagamentos / reservas (Fase 5)
-- `POST /api/payments` — PIX/cartão/wallet via `PaymentProvider` (mock por padrão)
-- `POST /api/payments/:id/simulate` — confirmar/recusar no ambiente DEMO
-- `POST /api/payments/webhooks/:provider` — webhook idempotente
-- `GET /api/finance/summary` — KPIs operacionais
+### Pagamentos / billing (Fase 7)
+- `POST /api/payments` — PIX/cartão/wallet via `PaymentProvider` (mock por padrão, Asaas sandbox opcional)
+- `GET /api/payments/capabilities` — provider, ambiente e capacidades
+- `POST /api/payments/:id/simulate` — confirmar/recusar apenas no mock
+- `POST /api/payments/:id/refund` — estorno (operador/admin, com motivo)
+- `POST /api/payments/webhooks/:provider` — webhook assinado e idempotente
+- `GET /api/finance/summary` — KPIs
+- `GET /api/finance/reconciliation` — divergências financeiras
+- Sessão: hold de carteira ou pré-autorização de cartão **antes** do RemoteStart; capture no StopTransaction
+
+Documentação: [docs/payment-provider.md](docs/payment-provider.md) · [docs/billing.md](docs/billing.md) · [docs/payment-webhooks.md](docs/payment-webhooks.md) · [docs/financial-reconciliation.md](docs/financial-reconciliation.md) · [docs/payments.md](docs/payments.md) · [docs/reservations.md](docs/reservations.md)
+
+### Reservas / fila
 - `POST /api/reservations` / `GET /api/reservations/me`
 - `POST /api/waitlist` / `POST /api/waitlist/:id/claim`
 - `GET/POST /api/favorites`
 - `GET /api/tariffs/quote` — estimativa calculada no backend
-
-Documentação: [docs/payments.md](docs/payments.md) · [docs/reservations.md](docs/reservations.md)
 
 ## Roles
 
@@ -234,9 +240,9 @@ pnpm --filter @evcharge/charger-simulator dev -- --mode mock --scenario FAST --m
 
 ## Fase atual
 
-**Fase 6 — Operação inteligente**: saúde do carregador, reliability, incidentes, manutenção, ChangeAvailability com histórico de comandos, watchdog/reconciliação, fila inteligente e UX operacional.
+**Fase 7 — Pagamento real (sandbox)**: Asaas + MockPaymentProvider, PIX/cartão, webhooks assinados, hold de carteira, pré-autorização/capture por sessão, refund e reconciliação financeira.
 
-Documentação: [docs/operations.md](docs/operations.md) · [docs/charger-health.md](docs/charger-health.md) · [docs/incidents.md](docs/incidents.md)
+Documentação: [docs/payment-provider.md](docs/payment-provider.md) · [docs/billing.md](docs/billing.md) · [docs/payment-webhooks.md](docs/payment-webhooks.md) · [docs/financial-reconciliation.md](docs/financial-reconciliation.md)
 
-Não iniciar Fase 7 automaticamente.
+Não iniciar Fase 8 automaticamente.
 

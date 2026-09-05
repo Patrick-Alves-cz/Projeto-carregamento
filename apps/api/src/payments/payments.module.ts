@@ -9,11 +9,20 @@ import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
 import { PaymentsScheduler } from "./payments.scheduler";
 import { FinanceController } from "./finance.controller";
+import { SessionBillingService } from "./session-billing.service";
+import { PaymentReconciliationService } from "./payment-reconciliation.service";
+import { FinanceReconciliationController } from "./finance-reconciliation.controller";
 
 @Module({
   imports: [WalletModule, NotificationsModule, ChargingModule],
-  controllers: [PaymentsController, PaymentWebhooksController, PaymentMethodsController, FinanceController],
-  providers: [PaymentsService, PaymentMethodsService, PaymentsScheduler],
-  exports: [PaymentsService],
+  controllers: [
+    PaymentsController,
+    PaymentWebhooksController,
+    PaymentMethodsController,
+    FinanceController,
+    FinanceReconciliationController,
+  ],
+  providers: [PaymentsService, PaymentMethodsService, PaymentsScheduler, SessionBillingService, PaymentReconciliationService],
+  exports: [PaymentsService, SessionBillingService],
 })
 export class PaymentsModule {}

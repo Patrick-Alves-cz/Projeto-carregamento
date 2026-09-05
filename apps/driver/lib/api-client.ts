@@ -385,6 +385,8 @@ export interface ChargingSession {
   socPercent?: number | null;
   visual?: { code: string; label: string };
   freshness?: string;
+  billingStatus?: string;
+  paymentKind?: string;
   costBreakdown?: {
     energyCents: number;
     timeCents: number;
@@ -421,6 +423,8 @@ export interface Wallet {
   id: string;
   userId: string;
   balanceCents: number;
+  heldCents?: number;
+  availableCents?: number;
   currency: string;
 }
 
@@ -453,7 +457,7 @@ export interface SessionsListResponse {
 export async function startSession(
   connectorId: string,
   vehicleId: string,
-  extras?: { reservationId?: string; paymentKind?: "WALLET" | "PIX" | "CARD" },
+  extras?: { reservationId?: string; paymentKind?: "WALLET" | "PIX" | "CARD"; paymentMethodId?: string },
 ) {
   const idempotencyKey =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -467,6 +471,7 @@ export async function startSession(
       idempotencyKey,
       reservationId: extras?.reservationId,
       paymentKind: extras?.paymentKind ?? "WALLET",
+      paymentMethodId: extras?.paymentMethodId,
     }),
   });
 }
@@ -554,9 +559,61 @@ export interface PaymentView {
   method: string;
   kind: string;
   provider: string;
+  providerRef?: string | null;
   pixCopyPaste?: string | null;
+  pixQrPayload?: string | null;
   demo?: boolean;
   createdAt: string;
+  confirmedAt?: string | null;
+  refundedAmountCents?: number;
+}
+
+export async function getPaymentCapabilities() {
+  return apiFetch<{
+    provider: string;
+    environment: string;
+    demo: boolean;
+    supportsPix: boolean;
+    supportsCard: boolean;
+    supportsCardPreAuthorization: boolean;
+    supportsRefund: boolean;
+    supportsSavedPaymentMethod: boolean;
+  }>("/payments/capabilities");
+}
+
+export async function listMyPayments() {
+  return apiFetch<PaymentView[]>("/payments/me");
+}
+
+export async function getPayment(id: string) {
+  return apiFetch<PaymentView>(`/payments/${id}`);
+}
+
+export interface SavedPaymentMethod {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  isDefault: boolean;
+}
+
+export async function listPaymentMethods() {
+  return apiFetch<SavedPaymentMethod[]>("/payment-methods");
+}
+
+export async function createPaymentMethod(input: {
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  token?: string;
+  isDefault?: boolean;
+}) {
+  return apiFetch<SavedPaymentMethod>("/payment-methods", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function createPayment(input: {
