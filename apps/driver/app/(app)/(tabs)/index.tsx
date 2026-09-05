@@ -1,477 +1,280 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useRouter, type Href } from "expo-router";
+import { ScreenState } from "../../../components/screen-state";
 import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  useWindowDimensions,
-  View,
-} from "react-native";
-import { useRouter } from "expo-router";
-import * as Location from "expo-location";
-import { Ionicons } from "@expo/vector-icons";
-import { CONNECTOR_TYPES } from "@evcharge/shared";
-import { NearbyStationCard } from "../../../components/nearby-station-card";
-import { StationMap } from "../../../components/station-map";
-import {
+  getMe,
+  getWallet,
+  listFavorites,
+  listMyReservations,
+  listMyWaitlist,
   listNearbyStations,
-  listVehicles,
-  type NearbyQuery,
+  listSessions,
+  stopSession,
+  type AuthUser,
+  type ChargingSession,
+  type Favorite,
   type NearbyStation,
-  type Vehicle,
+  type Reservation,
+  type WaitlistEntry,
+  type Wallet,
 } from "../../../lib/api-client";
-import { connectorTypeLabel } from "../../../lib/labels";
+import {
+  formatCurrency,
+  formatDuration,
+  formatEnergy,
+  formatPower,
+  sessionStatusLabel,
+} from "../../../lib/labels";
 import { DEFAULT_MAP_CENTER } from "../../../lib/map-style";
+import { driverErrorMessage } from "../../../lib/errors";
 import { useRealtime } from "../../../lib/use-realtime";
 import { colors, radius } from "../../../lib/theme";
 
-type Filters = {
-  compatible: boolean;
-  availableNow: boolean;
-  radiusKm: number;
-  powerMin?: number;
-  currentType?: "AC" | "DC";
-  connectorType?: string;
-  maxPrice?: number;
-};
-
-const INITIAL_FILTERS: Filters = {
-  compatible: true,
-  availableNow: false,
-  radiusKm: 25,
-};
-
-export default function MapScreen() {
+export default function HomeScreen() {
   const router = useRouter();
-  const { width } = useWindowDimensions();
-  const desktop = width >= 900;
-  const [center, setCenter] = useState(DEFAULT_MAP_CENTER);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationDenied, setLocationDenied] = useState(false);
-  const [stations, setStations] = useState<NearbyStation[]>([]);
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [vehicleId, setVehicleId] = useState<string | undefined>();
-  const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [active, setActive] = useState<ChargingSession | null>(null);
+  const [recent, setRecent] = useState<ChargingSession[]>([]);
+  const [nearby, setNearby] = useState<NearbyStation[]>([]);
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
   const [error, setError] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
-
-  const defaultVehicle = vehicles.find((item) => item.isDefault) ?? vehicles[0];
-  const selectedVehicleId = vehicleId ?? defaultVehicle?.id;
+  const [loading, setLoading] = useState(true);
+  const [stopping, setStopping] = useState(false);
 
   const load = useCallback(async () => {
-    const params: NearbyQuery = {
-      lat: center.lat,
-      lng: center.lng,
-      radiusKm: filters.radiusKm,
-      q: query.trim() || undefined,
-      availability: filters.availableNow || undefined,
-      powerMin: filters.powerMin,
-      currentType: filters.currentType,
-      connectorType: filters.connectorType,
-      maxPrice: filters.maxPrice,
-      vehicleId: filters.compatible ? selectedVehicleId : undefined,
-    };
-    const data = await listNearbyStations(params);
-    setStations(data);
+    const [me, walletData, sessions, nearbyData, favs, mineReservations, mineWaitlist] =
+      await Promise.all([
+        getMe(),
+        getWallet(),
+        listSessions({ limit: 8 }),
+        listNearbyStations({ lat: DEFAULT_MAP_CENTER.lat, lng: DEFAULT_MAP_CENTER.lng, radiusKm: 25 }),
+        listFavorites().catch(() => []),
+        listMyReservations().catch(() => []),
+        listMyWaitlist().catch(() => []),
+      ]);
+    setUser(me);
+    setWallet(walletData);
+    const live = sessions.items.find((item) => ["ACTIVE", "PREPARING", "PENDING", "PAUSED"].includes(item.status));
+    setActive(live ?? null);
+    setRecent(sessions.items.filter((item) => item.id !== live?.id).slice(0, 4));
+    setNearby(nearbyData.slice(0, 3));
+    setFavorites(favs);
+    setReservations(mineReservations.filter((item) => ["CONFIRMED", "PENDING", "ACTIVE"].includes(item.status)));
+    setWaitlist(mineWaitlist.filter((item) => ["WAITING", "NOTIFIED"].includes(item.status)));
     setError("");
-    setSelectedId((current) => (current && data.some((item) => item.id === current) ? current : null));
-  }, [center, filters, query, selectedVehicleId]);
-
-  useEffect(() => {
-    listVehicles()
-      .then((items) => {
-        setVehicles(items);
-        const fallback = items.find((item) => item.isDefault) ?? items[0];
-        if (fallback) setVehicleId(fallback.id);
-      })
-      .catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const current = await Location.getForegroundPermissionsAsync();
-        let status = current.status;
-        if (status === "undetermined") {
-          const requested = await Location.requestForegroundPermissionsAsync();
-          status = requested.status;
-        }
-        if (status !== "granted") {
-          setLocationDenied(true);
-          return;
-        }
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (cancelled) return;
-        const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setUserLocation(next);
-        setCenter(next);
-      } catch {
-        setLocationDenied(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    load()
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Não foi possível carregar o mapa");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      load()
+        .catch((err: unknown) => setError(driverErrorMessage(err)))
+        .finally(() => setLoading(false));
+    }, [load]),
+  );
 
   useRealtime(() => {
     void load();
   });
 
-  const selected = useMemo(
-    () => stations.find((item) => item.id === selectedId) ?? null,
-    [stations, selectedId],
-  );
+  async function handleStop() {
+    if (!active) return;
+    setStopping(true);
+    try {
+      await stopSession(active.id);
+      await load();
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setStopping(false);
+    }
+  }
 
-  const list = (
-    <ScrollView contentContainerStyle={styles.listContent} style={styles.list}>
-      {locationDenied ? (
-        <Text style={styles.hint}>Localização desativada. Busque uma cidade ou endereço.</Text>
-      ) : null}
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {loading ? (
-        <View style={styles.loadingRow}>
-          <ActivityIndicator color={colors.primary} />
-          <Text style={styles.hint}>Buscando estações…</Text>
-        </View>
-      ) : null}
-      {!loading && stations.length === 0 ? (
-        <Text style={styles.empty}>Nenhuma estação com esses filtros.</Text>
-      ) : null}
-      {stations.map((station) => (
-        <NearbyStationCard
-          key={station.id}
-          selected={station.id === selectedId}
-          station={station}
-          onPress={() => {
-            setSelectedId(station.id);
-            if (!desktop) router.push(`/station/${station.id}`);
-          }}
-        />
-      ))}
-    </ScrollView>
-  );
+  if (loading) return <ScreenState message="Carregando sua home…" />;
+
+  const firstName = user?.profile?.fullName?.split(" ")[0] ?? "Motorista";
+  const nextStation = nearby[0];
 
   return (
-    <View style={styles.screen}>
-      <View style={[styles.body, desktop && styles.bodyDesktop]}>
-        <View style={styles.mapPane}>
-          <StationMap
-            center={center}
-            selectedId={selectedId}
-            stations={stations}
-            userLocation={userLocation}
-            onSelect={(id) => {
-              setSelectedId(id);
-              if (!desktop) router.push(`/station/${id}`);
-            }}
-          />
-          <View style={styles.searchBar}>
-            <TextInput
-              onChangeText={setQuery}
-              onSubmitEditing={() => void load()}
-              placeholder="Buscar nome, endereço, cidade ou CEP"
-              placeholderTextColor={colors.muted}
-              style={styles.search}
-              value={query}
-            />
-            <Pressable onPress={() => setFiltersOpen(true)} style={styles.iconBtn}>
-              <Ionicons color={colors.text} name="options" size={20} />
-            </Pressable>
+    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+      <View>
+        <Text style={styles.kicker}>Olá, {firstName}</Text>
+        <Text style={styles.title}>Pronto para recarregar</Text>
+      </View>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <Pressable onPress={() => router.push("/(app)/(tabs)/wallet")} style={styles.balance}>
+        <Text style={styles.balanceLabel}>Saldo da carteira</Text>
+        <Text style={styles.balanceValue}>{formatCurrency(wallet?.balanceCents ?? 0)}</Text>
+        <Text style={styles.demo}>Ambiente DEMO · pagamentos simulados</Text>
+      </Pressable>
+
+      {active ? (
+        <Pressable onPress={() => router.push(`/charging/${active.id}` as Href)} style={styles.live}>
+          <Text style={styles.liveKicker}>CARREGANDO AGORA</Text>
+          <Text style={styles.liveTitle}>{active.station.name}</Text>
+          <Text style={styles.meta}>
+            Conector {active.connector.number} · {active.currentPowerKw ? formatPower(active.currentPowerKw) : "—"}
+          </Text>
+          <View style={styles.liveGrid}>
+            <LiveStat label="Energia" value={formatEnergy(active.energyKwh)} />
+            <LiveStat label="Tempo" value={formatDuration(active.durationSeconds)} />
+            <LiveStat label="Custo" value={formatCurrency(active.costCents)} />
+            {active.socPercent != null ? <LiveStat label="SOC" value={`${Math.round(active.socPercent)}%`} /> : null}
           </View>
-        </View>
-        {desktop ? (
-          <View style={styles.side}>
-            {selected ? (
-              <Pressable onPress={() => router.push(`/station/${selected.id}`)} style={styles.openBtn}>
-                <Text style={styles.openBtnText}>Abrir {selected.name}</Text>
-              </Pressable>
-            ) : null}
-            {list}
-          </View>
-        ) : (
-          <View style={styles.sheet}>{list}</View>
-        )}
+          <Pressable disabled={stopping} onPress={handleStop} style={styles.stop}>
+            <Text style={styles.stopText}>{stopping ? "Parando…" : "Parar"}</Text>
+          </Pressable>
+        </Pressable>
+      ) : nextStation ? (
+        <Pressable onPress={() => router.push(`/station/${nextStation.id}` as Href)} style={styles.card}>
+          <Text style={styles.sectionLabel}>Estação mais próxima</Text>
+          <Text style={styles.cardTitle}>{nextStation.name}</Text>
+          <Text style={styles.meta}>
+            {nextStation.availableConnectors} livres · {nextStation.totalConnectors} conectores
+            {nextStation.pricePerKwhCents != null ? ` · ${formatCurrency(nextStation.pricePerKwhCents)}/kWh` : ""}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      <View style={styles.shortcuts}>
+        <Shortcut label="Mapa" onPress={() => router.push("/(app)/(tabs)/map")} />
+        <Shortcut label="Carteira" onPress={() => router.push("/(app)/(tabs)/wallet")} />
+        <Shortcut label="Veículos" onPress={() => router.push("/(app)/(tabs)/vehicles")} />
+        <Shortcut label="Histórico" onPress={() => router.push("/(app)/(tabs)/history")} />
       </View>
 
-      <Modal animationType="slide" transparent visible={filtersOpen} onRequestClose={() => setFiltersOpen(false)}>
-        <View style={styles.modalBackdrop}>
-          <ScrollView contentContainerStyle={styles.modalCard}>
-            <Text style={styles.modalTitle}>Filtros</Text>
-            <FilterToggle
-              label="Compatível com meu veículo"
-              value={filters.compatible}
-              onChange={(compatible) => setFilters((current) => ({ ...current, compatible }))}
-            />
-            <FilterToggle
-              label="Disponível agora"
-              value={filters.availableNow}
-              onChange={(availableNow) => setFilters((current) => ({ ...current, availableNow }))}
-            />
-            <Text style={styles.filterLabel}>Distância</Text>
-            <View style={styles.chips}>
-              {[5, 10, 25, 50].map((km) => (
-                <Chip
-                  key={km}
-                  active={filters.radiusKm === km}
-                  label={`${km} km`}
-                  onPress={() => setFilters((current) => ({ ...current, radiusKm: km }))}
-                />
-              ))}
-            </View>
-            <Text style={styles.filterLabel}>Potência mínima</Text>
-            <View style={styles.chips}>
-              {[undefined, 22, 50, 100, 150].map((value) => (
-                <Chip
-                  key={String(value)}
-                  active={filters.powerMin === value}
-                  label={value ? `${value} kW` : "Qualquer"}
-                  onPress={() => setFilters((current) => ({ ...current, powerMin: value }))}
-                />
-              ))}
-            </View>
-            <Text style={styles.filterLabel}>Tipo</Text>
-            <View style={styles.chips}>
-              <Chip
-                active={!filters.currentType}
-                label="Todos"
-                onPress={() => setFilters((current) => ({ ...current, currentType: undefined }))}
-              />
-              <Chip
-                active={filters.currentType === "AC"}
-                label="AC"
-                onPress={() => setFilters((current) => ({ ...current, currentType: "AC" }))}
-              />
-              <Chip
-                active={filters.currentType === "DC"}
-                label="DC"
-                onPress={() => setFilters((current) => ({ ...current, currentType: "DC" }))}
-              />
-            </View>
-            <Text style={styles.filterLabel}>Conector</Text>
-            <View style={styles.chips}>
-              <Chip
-                active={!filters.connectorType}
-                label="Todos"
-                onPress={() => setFilters((current) => ({ ...current, connectorType: undefined }))}
-              />
-              {CONNECTOR_TYPES.filter((type) => type !== "OTHER").map((type) => (
-                <Chip
-                  key={type}
-                  active={filters.connectorType === type}
-                  label={connectorTypeLabel(type)}
-                  onPress={() => setFilters((current) => ({ ...current, connectorType: type }))}
-                />
-              ))}
-            </View>
-            <Text style={styles.filterLabel}>Preço máximo / kWh</Text>
-            <View style={styles.chips}>
-              {[undefined, 1.5, 1.89, 2.2].map((value) => (
-                <Chip
-                  key={String(value)}
-                  active={filters.maxPrice === value}
-                  label={value ? `R$ ${value.toFixed(2).replace(".", ",")}` : "Qualquer"}
-                  onPress={() => setFilters((current) => ({ ...current, maxPrice: value }))}
-                />
-              ))}
-            </View>
-            {vehicles.length > 1 ? (
-              <>
-                <Text style={styles.filterLabel}>Veículo</Text>
-                {vehicles.map((vehicle) => (
-                  <Pressable
-                    key={vehicle.id}
-                    onPress={() => setVehicleId(vehicle.id)}
-                    style={[styles.vehicleRow, vehicle.id === selectedVehicleId && styles.vehicleActive]}
-                  >
-                    <Text style={styles.vehicleName}>
-                      {vehicle.brand} {vehicle.model}
-                    </Text>
-                  </Pressable>
-                ))}
-              </>
-            ) : null}
-            <Pressable onPress={() => setFiltersOpen(false)} style={styles.apply}>
-              <Text style={styles.applyText}>Aplicar</Text>
-            </Pressable>
-          </ScrollView>
+      {waitlist.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>Fila</Text>
+          {waitlist.map((item) => (
+            <Text key={item.id} style={styles.meta}>
+              {item.station?.name ?? "Estação"} · posição {item.position} · {item.status === "NOTIFIED" ? "Sua vez" : "Aguardando"}
+            </Text>
+          ))}
         </View>
-      </Modal>
+      ) : null}
+
+      {reservations.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>Reservas</Text>
+          {reservations.slice(0, 3).map((item) => (
+            <Text key={item.id} style={styles.meta}>
+              {item.station?.name ?? "Estação"} · {new Date(item.startAt).toLocaleString("pt-BR")}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {favorites.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>Favoritos</Text>
+          {favorites.map((item) => (
+            <Pressable key={item.id} onPress={() => router.push(`/station/${item.stationId}` as Href)}>
+              <Text style={styles.cardTitle}>{item.station.name}</Text>
+              <Text style={styles.meta}>{item.station.address}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>Últimas sessões</Text>
+        {recent.length === 0 ? (
+          <Text style={styles.meta}>Nenhuma recarga ainda. Abra o mapa para começar.</Text>
+        ) : (
+          recent.map((item) => (
+            <Pressable key={item.id} onPress={() => router.push(`/charging/${item.id}` as Href)} style={styles.sessionRow}>
+              <Text style={styles.cardTitle}>{item.station.name}</Text>
+              <Text style={styles.meta}>
+                {sessionStatusLabel(item.status)} · {formatEnergy(item.energyKwh)} · {formatCurrency(item.costCents)}
+              </Text>
+            </Pressable>
+          ))
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+function LiveStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.liveStat}>
+      <Text style={styles.liveStatLabel}>{label}</Text>
+      <Text style={styles.liveStatValue}>{value}</Text>
     </View>
   );
 }
 
-function FilterToggle({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: boolean;
-  onChange: (value: boolean) => void;
-}) {
+function Shortcut({ label, onPress }: { label: string; onPress: () => void }) {
   return (
-    <Pressable onPress={() => onChange(!value)} style={styles.toggle}>
-      <Text style={styles.toggleLabel}>{label}</Text>
-      <View style={[styles.switch, value && styles.switchOn]}>
-        <View style={[styles.knob, value && styles.knobOn]} />
-      </View>
-    </Pressable>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+    <Pressable onPress={onPress} style={styles.shortcut}>
+      <Text style={styles.shortcutText}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.bg, flex: 1 },
-  body: { flex: 1 },
-  bodyDesktop: { flexDirection: "row" },
-  mapPane: { flex: 1, minHeight: 280 },
-  searchBar: {
-    flexDirection: "row",
+  content: { gap: 14, padding: 16, paddingBottom: 40 },
+  kicker: { color: colors.muted, fontSize: 13, fontWeight: "600" },
+  title: { color: colors.text, fontSize: 26, fontWeight: "800", marginTop: 2 },
+  error: { color: colors.danger },
+  balance: {
+    backgroundColor: colors.card,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    padding: 16,
+  },
+  balanceLabel: { color: colors.muted, fontSize: 12 },
+  balanceValue: { color: colors.text, fontSize: 28, fontWeight: "800", marginTop: 4 },
+  demo: { color: colors.amber, fontSize: 12, marginTop: 6 },
+  live: {
+    backgroundColor: "#0F2A24",
+    borderColor: colors.primary,
+    borderRadius: radius.lg,
+    borderWidth: 1,
     gap: 8,
-    left: 16,
-    position: "absolute",
-    right: 16,
-    top: 12,
+    padding: 16,
   },
-  search: {
+  liveKicker: { color: colors.primary, fontSize: 12, fontWeight: "800", letterSpacing: 0.6 },
+  liveTitle: { color: colors.text, fontSize: 18, fontWeight: "700" },
+  liveGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  liveStat: {
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    flexGrow: 1,
+    minWidth: "30%",
+    padding: 10,
+  },
+  liveStatLabel: { color: colors.muted, fontSize: 11 },
+  liveStatValue: { color: colors.text, fontSize: 15, fontWeight: "700", marginTop: 2 },
+  stop: { alignItems: "center", backgroundColor: colors.danger, borderRadius: radius.md, marginTop: 4, padding: 14 },
+  stopText: { color: "#fff", fontWeight: "800" },
+  card: {
     backgroundColor: colors.card,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    color: colors.text,
-    flex: 1,
-    fontSize: 15,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  iconBtn: {
-    alignItems: "center",
-    backgroundColor: colors.card,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    justifyContent: "center",
-    width: 48,
-  },
-  side: { borderLeftColor: colors.border, borderLeftWidth: 1, width: 380 },
-  sheet: {
-    backgroundColor: colors.bg,
-    borderTopColor: colors.border,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderTopWidth: 1,
-    height: "42%",
-  },
-  list: { flex: 1 },
-  listContent: { gap: 10, padding: 16, paddingBottom: 32 },
-  hint: { color: colors.muted, fontSize: 13 },
-  error: { color: colors.danger, fontSize: 13 },
-  empty: { color: colors.muted, marginTop: 12, textAlign: "center" },
-  loadingRow: { alignItems: "center", flexDirection: "row", gap: 8 },
-  openBtn: {
-    backgroundColor: colors.primary,
-    margin: 16,
-    marginBottom: 0,
-    borderRadius: radius.md,
-    paddingVertical: 14,
-  },
-  openBtnText: { color: colors.primaryText, fontWeight: "700", textAlign: "center" },
-  modalBackdrop: { backgroundColor: "rgba(0,0,0,0.55)", flex: 1, justifyContent: "flex-end" },
-  modalCard: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
     gap: 8,
-    padding: 20,
-    paddingBottom: 36,
+    padding: 16,
   },
-  modalTitle: { color: colors.text, fontSize: 20, fontWeight: "700", marginBottom: 8 },
-  filterLabel: { color: colors.muted, fontSize: 13, fontWeight: "600", marginTop: 10 },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: {
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { color: colors.muted, fontSize: 13, fontWeight: "600" },
-  chipTextActive: { color: colors.primaryText },
-  toggle: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-  },
-  toggleLabel: { color: colors.text, fontSize: 15, fontWeight: "600" },
-  switch: {
+  sectionLabel: { color: colors.muted, fontSize: 12, fontWeight: "700", letterSpacing: 0.4 },
+  cardTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
+  meta: { color: colors.muted, fontSize: 13 },
+  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  shortcut: {
     backgroundColor: colors.cardAlt,
-    borderRadius: 12,
-    height: 24,
-    justifyContent: "center",
-    paddingHorizontal: 2,
-    width: 44,
-  },
-  switchOn: { backgroundColor: colors.primary },
-  knob: {
-    backgroundColor: colors.text,
-    borderRadius: 10,
-    height: 20,
-    width: 20,
-  },
-  knobOn: { alignSelf: "flex-end" },
-  vehicleRow: {
-    borderColor: colors.border,
     borderRadius: radius.md,
-    borderWidth: 1,
-    padding: 12,
+    flexGrow: 1,
+    minWidth: "22%",
+    paddingVertical: 12,
+    paddingHorizontal: 10,
   },
-  vehicleActive: { borderColor: colors.primary },
-  vehicleName: { color: colors.text, fontWeight: "600" },
-  apply: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    marginTop: 16,
-    paddingVertical: 14,
-  },
-  applyText: { color: colors.primaryText, fontSize: 16, fontWeight: "700", textAlign: "center" },
+  shortcutText: { color: colors.text, fontWeight: "700", textAlign: "center" },
+  sessionRow: { gap: 2, paddingVertical: 4 },
 });

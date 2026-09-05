@@ -41,6 +41,21 @@ async function main() {
   await prisma.invitation.deleteMany({
     where: { company: { slug: { in: COMPANY_SLUGS } } },
   });
+  await prisma.paymentWebhookEvent.deleteMany({
+    where: { payment: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+  });
+  await prisma.chargingWaitlist.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.favoriteStation.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.reservation.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
+  await prisma.paymentMethod.deleteMany({
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
+  });
   await prisma.receipt.deleteMany({
     where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });
@@ -51,7 +66,7 @@ async function main() {
     where: { wallet: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
   });
   await prisma.payment.deleteMany({
-    where: { session: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
+    where: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } },
   });
   await prisma.meterValue.deleteMany({
     where: { session: { user: { email: { endsWith: DEMO_EMAIL_DOMAIN } } } },
@@ -166,6 +181,19 @@ async function main() {
       { userId: drivers[3]!.id, brand: "BMW", model: "iX1", year: 2024, batteryKwh: 64, connectorTypes: [ConnectorType.CCS2], isDefault: true },
       { userId: drivers[4]!.id, brand: "Volkswagen", model: "ID.4", year: 2023, batteryKwh: 77, connectorTypes: [ConnectorType.CCS2, ConnectorType.TYPE2], isDefault: true },
     ],
+  });
+
+  await prisma.paymentMethod.createMany({
+    data: drivers.map((driver, index) => ({
+      userId: driver.id,
+      provider: "mock",
+      providerMethodId: `tok_mock_4242_${index}`,
+      brand: "visa",
+      last4: "4242",
+      expMonth: 12,
+      expYear: 2030,
+      isDefault: true,
+    })),
   });
 
   type ConnSeed = { n: number; type: ConnectorType; power: number; status: ConnectorStatus };

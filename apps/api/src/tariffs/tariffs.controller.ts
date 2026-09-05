@@ -21,6 +21,21 @@ export class TariffsController {
     return this.tariffsService.list(user, companyId);
   }
 
+  @Get("quote")
+  @Roles(UserRole.DRIVER, UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: "Estimate session cost from the frozen tariff snapshot rules" })
+  quote(
+    @Query("connectorId") connectorId: string,
+    @Query("energyKwh") energyKwh?: string,
+    @Query("durationMinutes") durationMinutes?: string,
+  ) {
+    return this.tariffsService.quote(
+      connectorId,
+      Number(energyKwh ?? 10),
+      Number(durationMinutes ?? 30),
+    );
+  }
+
   @Get(":id")
   @Roles(UserRole.OPERATOR, UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: "Get tariff by id" })

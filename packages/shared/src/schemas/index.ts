@@ -9,3 +9,4 @@ export * from "./session";
 export * from "./tariff";
 export * from "./wallet";
 export * from "./invitation";
+export * from "./payments";

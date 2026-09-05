@@ -3,6 +3,7 @@ import {
   ChargerStatus,
   ConnectorStatus,
   Prisma,
+  ReservationStatus,
   SessionStatus,
 } from "@prisma/client";
 import {
@@ -182,6 +183,21 @@ export class OcppInboundService {
     }
 
     const next = fromProviderConnectorStatus(mapped);
+    if (connector.status === ConnectorStatus.RESERVED && next === ConnectorStatus.AVAILABLE) {
+      const liveReservation = await this.prisma.reservation.findFirst({
+        where: {
+          connectorId: connector.id,
+          status: { in: [ReservationStatus.CONFIRMED, ReservationStatus.ACTIVE] },
+        },
+      });
+      if (liveReservation) {
+        await this.prisma.charger.update({
+          where: { id: chargerId },
+          data: { lastSeenAt: new Date() },
+        });
+        return;
+      }
+    }
     if (connector.status !== next) {
       try {
         assertConnectorStatusTransition(connector.status, next);

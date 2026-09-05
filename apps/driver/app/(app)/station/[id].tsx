@@ -12,8 +12,14 @@ import { useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { ScreenState } from "../../../components/screen-state";
 import { StatusChip } from "../../../components/status-chip";
 import {
+  addFavorite,
+  createReservation,
   getStation,
+  joinWaitlist,
+  listFavorites,
   listVehicles,
+  quoteTariff,
+  removeFavorite,
   startSession,
   type Station,
   type Vehicle,
@@ -55,18 +61,23 @@ export default function StationDetailScreen() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [busyAction, setBusyAction] = useState("");
+  const [favorite, setFavorite] = useState(false);
+  const [quote, setQuote] = useState<{ totalCents: number; demoPayments: boolean } | null>(null);
   const [confirm, setConfirm] = useState<{ chargerId: string; connectorId: string } | null>(null);
 
   const selectedVehicle = vehicles.find((item) => item.id === vehicleId) ?? vehicles.find((item) => item.isDefault) ?? vehicles[0];
 
   const load = useCallback(async () => {
     if (!id) return;
-    const [stationData, vehicleData] = await Promise.all([
+    const [stationData, vehicleData, favs] = await Promise.all([
       getStation(id, selectedVehicle?.id ?? vehicleId),
       listVehicles(),
+      listFavorites().catch(() => []),
     ]);
     setStation(stationData);
     setVehicles(vehicleData);
+    setFavorite(favs.some((item) => item.stationId === id));
     if (!vehicleId) {
       const fallback = vehicleData.find((item) => item.isDefault) ?? vehicleData[0];
       if (fallback) setVehicleId(fallback.id);
@@ -94,11 +105,21 @@ export default function StationDetailScreen() {
   const confirmCharger = station?.chargers.find((item) => item.id === confirm?.chargerId);
   const confirmConnector = confirmCharger?.connectors.find((item) => item.id === confirm?.connectorId);
 
+  useEffect(() => {
+    if (!confirmConnector) {
+      setQuote(null);
+      return;
+    }
+    quoteTariff(confirmConnector.id)
+      .then((data) => setQuote({ totalCents: data.estimate.totalCents, demoPayments: data.demoPayments }))
+      .catch(() => setQuote(null));
+  }, [confirmConnector]);
+
   async function handleStart() {
     if (!confirmConnector || !selectedVehicle) return;
     setStarting(true);
     try {
-      const session = await startSession(confirmConnector.id, selectedVehicle.id);
+      const session = await startSession(confirmConnector.id, selectedVehicle.id, { paymentKind: "WALLET" });
       setConfirm(null);
       router.push(`/charging/${session.id}` as Href);
     } catch (err: unknown) {
@@ -106,6 +127,49 @@ export default function StationDetailScreen() {
       setConfirm(null);
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function toggleFavorite() {
+    if (!id) return;
+    try {
+      if (favorite) await removeFavorite(id);
+      else await addFavorite(id);
+      setFavorite(!favorite);
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    }
+  }
+
+  async function handleWaitlist(connectorId: string) {
+    setBusyAction(connectorId);
+    try {
+      await joinWaitlist(connectorId);
+      setError("");
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleReserve(connectorId: string) {
+    if (!selectedVehicle || !id) return;
+    setBusyAction(connectorId);
+    try {
+      const startAt = new Date(Date.now() + 5 * 60_000);
+      const endAt = new Date(startAt.getTime() + 45 * 60_000);
+      await createReservation({
+        stationId: id,
+        connectorId,
+        vehicleId: selectedVehicle.id,
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+      });
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusyAction("");
     }
   }
 
@@ -121,6 +185,9 @@ export default function StationDetailScreen() {
       <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
         <View style={styles.header}>
           <StatusChip label={stationStatusLabel(station.status)} color={stationStatusColor(station.status)} />
+          <Pressable onPress={() => void toggleFavorite()} style={styles.favBtn}>
+            <Text style={styles.favText}>{favorite ? "★ Favorita" : "☆ Favoritar"}</Text>
+          </Pressable>
           <Text style={styles.name}>{station.name}</Text>
           <Text style={styles.address}>
             {station.address}
@@ -224,6 +291,28 @@ export default function StationDetailScreen() {
                         {ctaLabel(connector.action)}
                       </Text>
                     </Pressable>
+                    {connector.action === "OCCUPIED" ? (
+                      <Pressable
+                        disabled={busyAction === connector.id}
+                        onPress={() => void handleWaitlist(connector.id)}
+                        style={styles.secondaryCta}
+                      >
+                        <Text style={styles.secondaryCtaText}>
+                          {busyAction === connector.id ? "Entrando…" : "Entrar na fila"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {canStart ? (
+                      <Pressable
+                        disabled={busyAction === connector.id || !selectedVehicle}
+                        onPress={() => void handleReserve(connector.id)}
+                        style={styles.secondaryCta}
+                      >
+                        <Text style={styles.secondaryCtaText}>
+                          {busyAction === connector.id ? "Reservando…" : "Reservar 45 min"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -257,6 +346,13 @@ export default function StationDetailScreen() {
                 Ociosidade: {formatCurrency(confirmConnector?.idleFeeCents ?? station.idleFeeCents ?? 0)}/min
               </Text>
             ) : null}
+            {quote ? (
+              <Text style={styles.modalLine}>
+                Estimativa (10 kWh / 30 min): {formatCurrency(quote.totalCents)}
+                {quote.demoPayments ? " · DEMO" : ""}
+              </Text>
+            ) : null}
+            <Text style={styles.modalLine}>Pagamento: carteira do motorista</Text>
             <Text style={styles.modalLine}>
               Veículo: {selectedVehicle ? `${selectedVehicle.brand} ${selectedVehicle.model}` : "Não selecionado"}
             </Text>
@@ -281,6 +377,8 @@ const styles = StyleSheet.create({
   screen: { backgroundColor: colors.bg, flex: 1 },
   content: { gap: 16, padding: 16, paddingBottom: 40 },
   header: { gap: 8 },
+  favBtn: { alignSelf: "flex-start", paddingVertical: 4 },
+  favText: { color: colors.amber, fontWeight: "700" },
   name: { color: colors.text, fontSize: 24, fontWeight: "700" },
   address: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   metaLine: { color: colors.muted, fontSize: 13 },
@@ -334,6 +432,14 @@ const styles = StyleSheet.create({
   ctaDisabled: { backgroundColor: colors.cardAlt },
   ctaText: { color: colors.primaryText, fontSize: 14, fontWeight: "700" },
   ctaTextDisabled: { color: colors.muted },
+  secondaryCta: {
+    alignItems: "center",
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingVertical: 10,
+  },
+  secondaryCtaText: { color: colors.text, fontSize: 13, fontWeight: "700" },
   modalBackdrop: { backgroundColor: "rgba(0,0,0,0.6)", flex: 1, justifyContent: "flex-end" },
   modalCard: {
     backgroundColor: colors.card,

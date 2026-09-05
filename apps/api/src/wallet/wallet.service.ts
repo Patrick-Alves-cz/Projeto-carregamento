@@ -1,6 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
-  calculateCostCents,
   ForbiddenError,
   InsufficientBalanceError,
   ValidationError,
@@ -253,8 +252,60 @@ export class WalletService {
     });
   }
 
-  calculateSessionCost(energyKwh: number, pricePerKwhCents: number): number {
-    return calculateCostCents(energyKwh, pricePerKwhCents);
+  async creditInTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      userId: string;
+      amountCents: number;
+      description: string;
+      idempotencyKey: string;
+    },
+  ): Promise<number> {
+    if (params.amountCents <= 0) throw new ValidationError("Credit amount must be positive");
+    const existing = await tx.walletTransaction.findUnique({
+      where: { idempotencyKey: params.idempotencyKey },
+    });
+    if (existing) return existing.balanceAfterCents;
+
+    await tx.$queryRaw`SELECT id FROM wallets WHERE user_id = ${params.userId} FOR UPDATE`;
+    const wallet = await tx.wallet.findUnique({ where: { userId: params.userId } });
+    if (!wallet) {
+      const created = await tx.wallet.create({ data: { userId: params.userId, balanceCents: 0 } });
+      return this.applyCredit(tx, created.id, params);
+    }
+    return this.applyCredit(tx, wallet.id, params);
+  }
+
+  private async applyCredit(
+    tx: Prisma.TransactionClient,
+    walletId: string,
+    params: { amountCents: number; description: string; idempotencyKey: string },
+  ) {
+    const rows = await tx.$queryRaw<Array<{ balance_cents: number }>>`
+      UPDATE wallets
+      SET balance_cents = balance_cents + ${params.amountCents},
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${walletId}
+      RETURNING balance_cents
+    `;
+    const balanceAfter = rows[0]?.balance_cents ?? params.amountCents;
+    await tx.walletTransaction.create({
+      data: {
+        walletId,
+        type: WalletTransactionType.CREDIT,
+        kind: WalletTxKind.DEPOSIT,
+        amountCents: params.amountCents,
+        balanceAfterCents: balanceAfter,
+        description: params.description,
+        idempotencyKey: params.idempotencyKey,
+      },
+    });
+    this.audit.info("wallet.credit", {
+      walletId,
+      amountCents: params.amountCents,
+      balanceAfterCents: balanceAfter,
+    });
+    return balanceAfter;
   }
 
   private assertDriver(user: AuthenticatedUser) {

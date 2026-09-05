@@ -50,6 +50,9 @@ export function NearbyStationCard({
         {station.pricePerKwhCents != null ? (
           <Text style={styles.metaText}>{formatCurrency(station.pricePerKwhCents)}/kWh</Text>
         ) : null}
+        {station.accessType ? (
+          <Text style={styles.metaText}>{station.accessType === "PUBLIC" ? "Público" : "Privado"}</Text>
+        ) : null}
       </View>
       <View style={styles.footer}>
         <View style={[styles.dot, { backgroundColor: stationStatusColor(station.status) }]} />

@@ -104,6 +104,7 @@ packages/
   domain/               # Regras de negócio e erros de domínio
   database/             # Prisma schema e client
   charger-provider/     # Abstração ChargerProvider (Mock + OCPP)
+  payment-provider/     # Abstração PaymentProvider (mock DEMO)
   ocpp/                 # Framing, schemas e mappers OCPP 1.6J
   shared/               # Schemas Zod, tipos e constantes
   ui/                   # Componentes UI compartilhados
@@ -168,6 +169,18 @@ Documentação interativa: **http://localhost:3001/api/docs**
 WebSocket frontend: `ws://localhost:3001/realtime` (JWT no `auth.token`)  
 WebSocket OCPP: `ws://localhost:3001/ocpp/{identity}` (subprotocolo `ocpp1.6`, Basic auth de equipamento)
 
+### Pagamentos / reservas (Fase 5)
+- `POST /api/payments` — PIX/cartão/wallet via `PaymentProvider` (mock por padrão)
+- `POST /api/payments/:id/simulate` — confirmar/recusar no ambiente DEMO
+- `POST /api/payments/webhooks/:provider` — webhook idempotente
+- `GET /api/finance/summary` — KPIs operacionais
+- `POST /api/reservations` / `GET /api/reservations/me`
+- `POST /api/waitlist` / `POST /api/waitlist/:id/claim`
+- `GET/POST /api/favorites`
+- `GET /api/tariffs/quote` — estimativa calculada no backend
+
+Documentação: [docs/payments.md](docs/payments.md) · [docs/reservations.md](docs/reservations.md)
+
 ## Roles
 
 | Role | Escopo |
@@ -221,6 +234,6 @@ pnpm --filter @evcharge/charger-simulator dev -- --mode mock --scenario FAST --m
 
 ## Fase atual
 
-**Fase 4 — OCPP 1.6J**: gateway WebSocket, autenticação de equipamento, telemetria, simulador de charge point e Admin operacional. O mock permanece para os testes das fases anteriores.
+**Fase 5 — Pagamento, reservas e experiência do motorista**: `PaymentProvider` mock (PIX/cartão DEMO), snapshot de tarifa, reservas, fila, favoritos e telas Admin/Driver. OCPP 1.6J da Fase 4 permanece.
 
-Não iniciar Fase 5 automaticamente (pagamentos reais, OCPP 2.x, reservas).
+Não iniciar Fase 6 automaticamente.

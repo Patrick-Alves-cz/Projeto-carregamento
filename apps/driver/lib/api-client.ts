@@ -90,6 +90,9 @@ export interface Station {
     totalConnectors: number;
     availableConnectors: number;
     occupiedConnectors: number;
+    reservedConnectors?: number;
+    offlineConnectors?: number;
+    faultedConnectors?: number;
   };
   chargers: Charger[];
 }
@@ -109,6 +112,10 @@ export interface NearbyStation {
   openingHoursLabel: string | null;
   chargerCount: number;
   availableConnectors: number;
+  occupiedConnectors?: number;
+  reservedConnectors?: number;
+  offlineConnectors?: number;
+  faultedConnectors?: number;
   totalConnectors: number;
   crowded: boolean;
   currentType: "AC" | "DC" | "MIXED" | null;
@@ -363,6 +370,15 @@ export interface ChargingSession {
   payment?: { amountCents: number; status: string; method?: string } | null;
   receipt?: { id: string; number: string; payload: ReceiptPayload } | null;
   meterValues?: Array<{ timestamp: string; energyKwh: number; powerKw: number }>;
+  socPercent?: number | null;
+  costBreakdown?: {
+    energyCents: number;
+    timeCents: number;
+    sessionFeeCents: number;
+    idleCents: number;
+    parkingCents: number;
+    totalCents: number;
+  } | null;
 }
 
 export interface ReceiptPayload {
@@ -378,6 +394,11 @@ export interface ReceiptPayload {
   tariff: { name: string; pricePerKwhCents: number; connectionFeeCents?: number; idleFeeCents?: number } | null;
   connectionFeeCents: number;
   idleFeeCents: number;
+  parkingCents?: number;
+  energyCents?: number;
+  timeCents?: number;
+  pricePerKwhCents?: number;
+  pricePerMinuteCents?: number;
   totalCents: number;
   paymentMethod: string;
 }
@@ -415,14 +436,24 @@ export interface SessionsListResponse {
   limit: number;
 }
 
-export async function startSession(connectorId: string, vehicleId: string) {
+export async function startSession(
+  connectorId: string,
+  vehicleId: string,
+  extras?: { reservationId?: string; paymentKind?: "WALLET" | "PIX" | "CARD" },
+) {
   const idempotencyKey =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `start-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
   return apiFetch<ChargingSession>("/sessions/start", {
     method: "POST",
-    body: JSON.stringify({ connectorId, vehicleId, idempotencyKey }),
+    body: JSON.stringify({
+      connectorId,
+      vehicleId,
+      idempotencyKey,
+      reservationId: extras?.reservationId,
+      paymentKind: extras?.paymentKind ?? "WALLET",
+    }),
   });
 }
 
@@ -481,13 +512,167 @@ export async function getSession(sessionId: string) {
   return apiFetch<ChargingSession>(`/sessions/${sessionId}`);
 }
 
-export async function listSessions(params?: { status?: string; page?: number; limit?: number }) {
+export async function listSessions(params?: {
+  status?: string;
+  page?: number;
+  limit?: number;
+  stationId?: string;
+  vehicleId?: string;
+  from?: string;
+  to?: string;
+}) {
   const query = new URLSearchParams();
   if (params?.status) query.set("status", params.status);
   if (params?.page) query.set("page", String(params.page));
   if (params?.limit) query.set("limit", String(params.limit));
+  if (params?.stationId) query.set("stationId", params.stationId);
+  if (params?.vehicleId) query.set("vehicleId", params.vehicleId);
+  if (params?.from) query.set("from", params.from);
+  if (params?.to) query.set("to", params.to);
   const qs = query.toString();
   return apiFetch<SessionsListResponse>(`/sessions${qs ? `?${qs}` : ""}`);
+}
+
+export interface PaymentView {
+  id: string;
+  status: string;
+  amountCents: number;
+  method: string;
+  kind: string;
+  provider: string;
+  pixCopyPaste?: string | null;
+  demo?: boolean;
+  createdAt: string;
+}
+
+export async function createPayment(input: {
+  amountCents: number;
+  kind?: "PIX" | "CARD" | "WALLET";
+  paymentMethodId?: string;
+}) {
+  const idempotencyKey =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `pay-${Date.now()}`;
+  return apiFetch<PaymentView>("/payments", {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({ ...input, idempotencyKey }),
+  });
+}
+
+export async function simulatePayment(id: string, outcome: "CONFIRMED" | "FAILED" | "EXPIRED") {
+  return apiFetch<PaymentView>(`/payments/${id}/simulate`, {
+    method: "POST",
+    body: JSON.stringify({ outcome }),
+  });
+}
+
+export async function quoteTariff(connectorId: string, energyKwh = 10, durationMinutes = 30) {
+  const params = new URLSearchParams({
+    connectorId,
+    energyKwh: String(energyKwh),
+    durationMinutes: String(durationMinutes),
+  });
+  return apiFetch<{
+    tariff: { id: string; name: string; currency: string };
+    snapshot: {
+      name: string;
+      pricePerKwhCents: number;
+      pricePerMinuteCents: number;
+      idleFeeCents: number;
+      connectionFeeCents: number;
+      parkingPriceCents: number;
+      currency: string;
+    };
+    estimate: { totalCents: number; energyCents: number; timeCents: number; sessionFeeCents: number };
+    demoPayments: boolean;
+  }>(`/tariffs/quote?${params.toString()}`);
+}
+
+export interface Reservation {
+  id: string;
+  stationId: string;
+  connectorId: string | null;
+  vehicleId: string;
+  startAt: string;
+  endAt: string;
+  status: string;
+  station?: { name: string };
+  connector?: { number: number; type: string } | null;
+}
+
+export async function createReservation(input: {
+  stationId: string;
+  connectorId?: string;
+  vehicleId: string;
+  startAt: string;
+  endAt: string;
+}) {
+  return apiFetch<Reservation>("/reservations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listMyReservations() {
+  return apiFetch<Reservation[]>("/reservations/me");
+}
+
+export async function cancelReservation(id: string) {
+  return apiFetch<Reservation>(`/reservations/${id}/cancel`, { method: "POST" });
+}
+
+export interface WaitlistEntry {
+  id: string;
+  connectorId: string;
+  position: number;
+  status: string;
+  expiresAt: string | null;
+  station?: { name: string };
+}
+
+export async function joinWaitlist(connectorId: string) {
+  return apiFetch<WaitlistEntry>("/waitlist", {
+    method: "POST",
+    body: JSON.stringify({ connectorId }),
+  });
+}
+
+export async function listMyWaitlist() {
+  return apiFetch<WaitlistEntry[]>("/waitlist/me");
+}
+
+export async function claimWaitlist(id: string) {
+  return apiFetch<WaitlistEntry>(`/waitlist/${id}/claim`, { method: "POST" });
+}
+
+export async function cancelWaitlist(id: string) {
+  return apiFetch<WaitlistEntry>(`/waitlist/${id}/cancel`, { method: "POST" });
+}
+
+export interface Favorite {
+  id: string;
+  stationId: string;
+  connectorId: string | null;
+  station: { id: string; name: string; address: string; city: string | null };
+}
+
+export async function listFavorites() {
+  return apiFetch<Favorite[]>("/favorites");
+}
+
+export async function addFavorite(stationId: string, connectorId?: string) {
+  return apiFetch<Favorite>("/favorites", {
+    method: "POST",
+    body: JSON.stringify({ stationId, connectorId }),
+  });
+}
+
+export async function removeFavorite(stationId: string) {
+  return apiFetch<{ stationId: string; deleted: boolean }>(`/favorites/${stationId}`, {
+    method: "DELETE",
+  });
 }
 
 const WS_URL = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api").replace(

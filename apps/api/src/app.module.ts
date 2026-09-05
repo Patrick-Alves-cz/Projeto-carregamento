@@ -25,6 +25,8 @@ import { TariffsModule } from "./tariffs/tariffs.module";
 import { UsersModule } from "./users/users.module";
 import { VehiclesModule } from "./vehicles/vehicles.module";
 import { WalletModule } from "./wallet/wallet.module";
+import { PaymentsModule } from "./payments/payments.module";
+import { ReservationsModule } from "./reservations/reservations.module";
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { WalletModule } from "./wallet/wallet.module";
     OpsModule,
     TariffsModule,
     WalletModule,
+    PaymentsModule,
+    ReservationsModule,
     AuthModule,
     UsersModule,
     CompaniesModule,

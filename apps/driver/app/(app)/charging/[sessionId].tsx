@@ -206,7 +206,13 @@ export default function ChargingScreen() {
             value={receipt.tariff ? `${formatCurrency(receipt.tariff.pricePerKwhCents)} / kWh` : "—"}
           />
           {receipt.connectionFeeCents > 0 ? (
-            <InfoRow label="Taxa de conexão" value={formatCurrency(receipt.connectionFeeCents)} />
+            <InfoRow label="Taxa de sessão" value={formatCurrency(receipt.connectionFeeCents)} />
+          ) : null}
+          {(receipt.timeCents ?? 0) > 0 ? (
+            <InfoRow label="Tempo" value={formatCurrency(receipt.timeCents ?? 0)} />
+          ) : null}
+          {(receipt.parkingCents ?? 0) > 0 ? (
+            <InfoRow label="Estacionamento" value={formatCurrency(receipt.parkingCents ?? 0)} />
           ) : null}
           <InfoRow label="Total" value={formatCurrency(receipt.totalCents)} />
           <InfoRow label="Pagamento" value={receipt.paymentMethod} />

@@ -77,6 +77,7 @@ enum ConnectorStatus {
   FINISHING
   UNAVAILABLE
   FAULTED
+  RESERVED
 }
 
 enum SessionStatus {
@@ -108,9 +109,13 @@ enum WalletTransactionType {
 
 enum PaymentStatus {
   PENDING
+  AUTHORIZED
+  CONFIRMED
   COMPLETED
   FAILED
+  CANCELLED
   REFUNDED
+  EXPIRED
 }
 
 enum WalletTxKind {
@@ -134,6 +139,39 @@ enum NotificationType {
   SESSION_RESUMED
   SESSION_COMPLETED
   SESSION_INSUFFICIENT_BALANCE
+  RESERVATION_CONFIRMED
+  RESERVATION_REMINDER
+  RESERVATION_STARTED
+  RESERVATION_EXPIRED
+  RESERVATION_NO_SHOW
+  CONNECTOR_AVAILABLE
+  WAITLIST_JOINED
+  WAITLIST_NOTIFIED
+  PAYMENT_CONFIRMED
+  PAYMENT_FAILED
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  NO_SHOW
+}
+
+enum WaitlistStatus {
+  WAITING
+  NOTIFIED
+  CLAIMED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentMethodStatus {
+  ACTIVE
+  REVOKED
 }
 
 // ─── Users & Profiles ──────────────────────────────────────────────────────────
@@ -159,6 +197,10 @@ model User {
   notifications       InAppNotification[]
   receipts            Receipt[]
   payments            Payment[]
+  paymentMethods      PaymentMethod[]
+  reservations        Reservation[]
+  waitlistEntries     ChargingWaitlist[]
+  favoriteStations    FavoriteStation[]
 
   @@map("users")
 }
@@ -207,10 +249,13 @@ model Company {
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
-  members     CompanyMember[]
-  stations    Station[]
-  tariffs     Tariff[]
-  invitations Invitation[]
+  members      CompanyMember[]
+  stations     Station[]
+  tariffs      Tariff[]
+  invitations  Invitation[]
+  reservations Reservation[]
+  waitlist     ChargingWaitlist[]
+  payments     Payment[]
 
   @@map("companies")
 }
@@ -246,6 +291,7 @@ model Vehicle {
 
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   chargingSessions ChargingSession[]
+  reservations     Reservation[]
 
   @@map("vehicles")
 }
@@ -269,9 +315,12 @@ model Station {
   createdAt    DateTime          @default(now()) @map("created_at")
   updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  tariff   Tariff?   @relation(fields: [tariffId], references: [id], onDelete: SetNull)
-  chargers Charger[]
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tariff      Tariff?            @relation(fields: [tariffId], references: [id], onDelete: SetNull)
+  chargers    Charger[]
+  reservations Reservation[]
+  waitlist     ChargingWaitlist[]
+  favorites    FavoriteStation[]
 
   @@index([companyId, status])
   @@map("stations")
@@ -316,10 +365,13 @@ model Connector {
   createdAt  DateTime        @default(now()) @map("created_at")
   updatedAt  DateTime        @updatedAt @map("updated_at")
 
-  charger          Charger           @relation(fields: [chargerId], references: [id], onDelete: Cascade)
-  tariff           Tariff?           @relation(fields: [tariffId], references: [id], onDelete: SetNull)
+  charger          Charger            @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  tariff           Tariff?            @relation(fields: [tariffId], references: [id], onDelete: SetNull)
   chargingSessions ChargingSession[]
   ocppTxs          OcppTransaction[]
+  reservations     Reservation[]
+  waitlist         ChargingWaitlist[]
+  favorites        FavoriteStation[]
 
   @@unique([chargerId, number])
   @@index([chargerId, status])
@@ -336,7 +388,9 @@ model Tariff {
   pricePerMinuteCents Int       @default(0) @map("price_per_minute_cents")
   idleFeeCents        Int       @default(0) @map("idle_fee_cents")
   connectionFeeCents  Int       @default(0) @map("connection_fee_cents")
+  parkingPriceCents   Int       @default(0) @map("parking_price_cents")
   minBalanceCents     Int       @default(1000) @map("min_balance_cents")
+  minimumChargeCents  Int       @default(0) @map("minimum_charge_cents")
   currency            String    @default("BRL")
   validFrom           DateTime? @map("valid_from")
   validTo             DateTime? @map("valid_to")
@@ -375,6 +429,8 @@ model ChargingSession {
   costCents          Int                @default(0) @map("cost_cents")
   idTag              String?            @map("id_tag")
   remoteStopPending  Boolean            @default(false) @map("remote_stop_pending")
+  reservationId      String?            @map("reservation_id")
+  paymentKind        String             @default("WALLET") @map("payment_kind")
   idempotencyKey     String?            @map("idempotency_key")
   stopIdempotencyKey String?            @map("stop_idempotency_key")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -390,6 +446,7 @@ model ChargingSession {
   walletTransactions WalletTransaction[]
   ocppTxs            OcppTransaction[]
   ocppAuths          OcppAuthorization[]
+  reservation        Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, idempotencyKey])
   @@unique([userId, stopIdempotencyKey])
@@ -397,6 +454,7 @@ model ChargingSession {
   @@index([connectorId, status])
   @@index([status, startedAt])
   @@index([idTag])
+  @@index([reservationId])
   @@map("charging_sessions")
 }
 
@@ -453,22 +511,149 @@ model WalletTransaction {
 }
 
 model Payment {
-  id             String        @id @default(cuid())
-  userId         String        @map("user_id")
-  sessionId      String?       @unique @map("session_id")
-  amountCents    Int           @map("amount_cents")
-  currency       String        @default("BRL")
-  status         PaymentStatus @default(PENDING)
-  method         String        @default("WALLET_DEMO")
-  idempotencyKey String?       @unique @map("idempotency_key")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id              String        @id @default(cuid())
+  userId          String        @map("user_id")
+  companyId       String?       @map("company_id")
+  sessionId       String?       @unique @map("session_id")
+  paymentMethodId String?       @map("payment_method_id")
+  amountCents     Int           @map("amount_cents")
+  currency        String        @default("BRL")
+  status          PaymentStatus @default(PENDING)
+  method          String        @default("WALLET_DEMO")
+  kind            String        @default("WALLET")
+  provider        String        @default("mock")
+  providerRef     String?       @map("provider_ref")
+  pixCopyPaste    String?       @map("pix_copy_paste")
+  pixQrPayload    String?       @map("pix_qr_payload")
+  expiresAt       DateTime?     @map("expires_at")
+  confirmedAt     DateTime?     @map("confirmed_at")
+  cancelledAt     DateTime?     @map("cancelled_at")
+  failureCode     String?       @map("failure_code")
+  walletCredited  Boolean       @default(false) @map("wallet_credited")
+  idempotencyKey  String?       @unique @map("idempotency_key")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
 
-  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  session ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  session       ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  paymentMethod PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  webhookEvents PaymentWebhookEvent[]
 
   @@index([userId, createdAt])
+  @@index([companyId, status, createdAt])
+  @@index([provider, providerRef])
+  @@index([status, expiresAt])
   @@map("payments")
+}
+
+model PaymentMethod {
+  id               String              @id @default(cuid())
+  userId           String              @map("user_id")
+  provider         String              @default("mock")
+  providerMethodId String              @map("provider_method_id")
+  brand            String
+  last4            String
+  expMonth         Int                 @map("exp_month")
+  expYear          Int                 @map("exp_year")
+  isDefault        Boolean             @default(false) @map("is_default")
+  status           PaymentMethodStatus @default(ACTIVE)
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId, status])
+  @@map("payment_methods")
+}
+
+model PaymentWebhookEvent {
+  id              String    @id @default(cuid())
+  provider        String
+  externalEventId String    @map("external_event_id")
+  paymentId       String?   @map("payment_id")
+  eventType       String    @map("event_type")
+  payload         Json      @default("{}")
+  processedAt     DateTime? @map("processed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalEventId])
+  @@index([paymentId])
+  @@map("payment_webhook_events")
+}
+
+model Reservation {
+  id          String            @id @default(cuid())
+  userId      String            @map("user_id")
+  companyId   String            @map("company_id")
+  stationId   String            @map("station_id")
+  connectorId String?           @map("connector_id")
+  vehicleId   String            @map("vehicle_id")
+  startAt     DateTime          @map("start_at")
+  endAt       DateTime          @map("end_at")
+  status      ReservationStatus @default(CONFIRMED)
+  graceUntil  DateTime?         @map("grace_until")
+  expiresAt   DateTime?         @map("expires_at")
+  cancelledAt DateTime?         @map("cancelled_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company    Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station    Station           @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector  Connector?        @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  vehicle    Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  sessions   ChargingSession[]
+
+  @@index([userId, status, startAt])
+  @@index([companyId, status, startAt])
+  @@index([connectorId, startAt, endAt])
+  @@index([stationId, startAt])
+  @@map("reservations")
+}
+
+model ChargingWaitlist {
+  id          String         @id @default(cuid())
+  userId      String         @map("user_id")
+  companyId   String         @map("company_id")
+  stationId   String         @map("station_id")
+  connectorId String         @map("connector_id")
+  position    Int
+  status      WaitlistStatus @default(WAITING)
+  notifiedAt  DateTime?      @map("notified_at")
+  expiresAt   DateTime?      @map("expires_at")
+  claimedAt   DateTime?      @map("claimed_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station   Station   @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+
+  @@index([connectorId, status, position])
+  @@index([userId, status])
+  @@index([companyId, status])
+  @@map("charging_waitlist")
+}
+
+model FavoriteStation {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  stationId   String   @map("station_id")
+  connectorId String?  @map("connector_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  station   Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, stationId])
+  @@index([userId, createdAt])
+  @@map("favorite_stations")
 }
 
 model Receipt {

@@ -17,7 +17,9 @@ export default function TariffsPage() {
   const [error, setError] = useState("");
   const [name, setName] = useState("Tarifa padrão");
   const [price, setPrice] = useState("1.89");
+  const [minute, setMinute] = useState("0");
   const [idle, setIdle] = useState("0");
+  const [parking, setParking] = useState("0");
   const [minBalance, setMinBalance] = useState("10");
   const [editingId, setEditingId] = useState<string | null>(null);
   const query = useQuery(listTariffs, [tick]);
@@ -31,7 +33,9 @@ export default function TariffsPage() {
       const payload = {
         name,
         pricePerKwhCents: Math.round(Number(price.replace(",", ".")) * 100),
+        pricePerMinuteCents: Math.round(Number(minute.replace(",", ".")) * 100) || 0,
         idleFeeCents: Math.round(Number(idle.replace(",", ".")) * 100) || 0,
+        parkingPriceCents: Math.round(Number(parking.replace(",", ".")) * 100) || 0,
         minBalanceCents: Math.round(Number(minBalance.replace(",", ".")) * 100) || 1000,
       };
       if (editingId) {
@@ -67,8 +71,16 @@ export default function TariffsPage() {
               <Input value={price} onChange={(e) => setPrice(e.target.value)} />
             </div>
             <div className="space-y-2">
+              <Label>R$ / minuto</Label>
+              <Input value={minute} onChange={(e) => setMinute(e.target.value)} />
+            </div>
+            <div className="space-y-2">
               <Label>Ociosidade R$/min</Label>
               <Input value={idle} onChange={(e) => setIdle(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Estacionamento R$</Label>
+              <Input value={parking} onChange={(e) => setParking(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>Saldo mínimo R$</Label>
@@ -105,7 +117,9 @@ export default function TariffsPage() {
                     setEditingId(tariff.id);
                     setName(tariff.name);
                     setPrice((tariff.pricePerKwhCents / 100).toFixed(2));
+                    setMinute((tariff.pricePerMinuteCents / 100).toFixed(2));
                     setIdle((tariff.idleFeeCents / 100).toFixed(2));
+                    setParking(((tariff.parkingPriceCents ?? 0) / 100).toFixed(2));
                     setMinBalance((tariff.minBalanceCents / 100).toFixed(2));
                   }}
                 >

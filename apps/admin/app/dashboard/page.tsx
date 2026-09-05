@@ -7,7 +7,7 @@ import { KpiSkeleton, QueryError, TableSkeleton } from "@/components/query-state
 import { StationsTable } from "@/components/stations-table";
 import { useQuery } from "@/hooks/use-query";
 import { useAuth } from "@/components/app-shell";
-import { getOpsSummary, listStations } from "@/lib/api-client";
+import { getFinanceSummary, getOpsSummary, listStations } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/labels";
 
 function Kpi({
@@ -42,6 +42,7 @@ function Kpi({
 export default function DashboardPage() {
   const user = useAuth();
   const summaryQuery = useQuery(getOpsSummary, []);
+  const financeQuery = useQuery(getFinanceSummary, []);
   const stationsQuery = useQuery(listStations, []);
   const summary = summaryQuery.data;
   const company = user.companies[0]?.name;
@@ -72,6 +73,20 @@ export default function DashboardPage() {
             value={formatCurrency(summary.demoRevenueCents)}
             hint={`${summary.energyKwh.toFixed(1)} kWh · ${summary.activeCustomers} clientes`}
             icon={Wrench}
+          />
+        </div>
+      ) : null}
+
+      {financeQuery.data ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Kpi label="Receita do período" value={formatCurrency(financeQuery.data.revenueCents)} hint="Sessões concluídas" icon={Wrench} />
+          <Kpi label="Receita hoje" value={formatCurrency(financeQuery.data.todayCents)} hint={`Mês ${formatCurrency(financeQuery.data.monthCents)}`} icon={Wrench} />
+          <Kpi label="Ticket médio" value={formatCurrency(financeQuery.data.averageTicketCents)} hint={`${financeQuery.data.sessions} sessões`} icon={Cable} />
+          <Kpi
+            label="Pagamentos"
+            value={financeQuery.data.pendingPayments}
+            hint={`${financeQuery.data.failedPayments} falhos`}
+            icon={MapPin}
           />
         </div>
       ) : null}

@@ -19,11 +19,18 @@ export type DomainEventType =
   | "charger.booted"
   | "charger.heartbeat"
   | "charger.faulted"
-  | "connector.status.changed";
+  | "connector.status.changed"
+  | "payment.created"
+  | "payment.confirmed"
+  | "payment.failed"
+  | "reservation.created"
+  | "reservation.cancelled"
+  | "waitlist.joined"
+  | "waitlist.notified";
 
 export interface DomainEvent<TPayload = Record<string, unknown>> {
   type: DomainEventType;
-  entityType: "session" | "charger" | "connector";
+  entityType: "session" | "charger" | "connector" | "payment" | "reservation" | "waitlist";
   entityId: string;
   payload: TPayload;
   timestamp: Date;

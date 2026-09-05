@@ -2,9 +2,12 @@ import { useCallback, useState } from "react";
 import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ScreenState } from "../../../components/screen-state";
 import {
+  createPayment,
   getWallet,
   listWalletTransactions,
+  simulatePayment,
   topUpWallet,
+  type PaymentView,
   type Wallet,
   type WalletTransaction,
 } from "../../../lib/api-client";
@@ -22,6 +25,7 @@ export default function WalletScreen() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [pendingPix, setPendingPix] = useState<PaymentView | null>(null);
 
   const load = useCallback(async () => {
     const [mine, txs] = await Promise.all([getWallet(), listWalletTransactions()]);
@@ -36,6 +40,35 @@ export default function WalletScreen() {
         .finally(() => setLoading(false));
     }, [load]),
   );
+
+  async function startPix(amountCents: number) {
+    setBusy(true);
+    setError("");
+    try {
+      const payment = await createPayment({ amountCents, kind: "PIX" });
+      setPendingPix(payment);
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmPix() {
+    if (!pendingPix) return;
+    setBusy(true);
+    try {
+      await simulatePayment(pendingPix.id, "CONFIRMED");
+      setPendingPix(null);
+      const [mine, txs] = await Promise.all([getWallet(), listWalletTransactions()]);
+      setWallet(mine);
+      setItems(txs.items);
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function topUp(amountCents: number) {
     setBusy(true);
@@ -68,12 +101,30 @@ export default function WalletScreen() {
       <View style={styles.balanceCard}>
         <Text style={styles.kicker}>Saldo atual</Text>
         <Text style={styles.balance}>{formatCurrency(wallet?.balanceCents ?? 0)}</Text>
-        <Text style={styles.hint}>Depósitos DEMO — sem gateway real</Text>
+        <Text style={styles.hint}>Ambiente DEMO · PIX e cartão simulados, sem gateway real</Text>
       </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {pendingPix ? (
+        <View style={styles.pixBox}>
+          <Text style={styles.pixTitle}>PIX DEMO pendente</Text>
+          <Text style={styles.pixCopy}>{pendingPix.pixCopyPaste ?? "Código PIX gerado no ambiente DEMO"}</Text>
+          <Pressable disabled={busy} onPress={() => void confirmPix()} style={styles.preset}>
+            <Text style={styles.presetText}>Simular pagamento confirmado</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      <Text style={styles.section}>Adicionar via PIX DEMO</Text>
       <View style={styles.presets}>
         {PRESETS.map((amount) => (
-          <Pressable disabled={busy} key={amount} onPress={() => void topUp(amount)} style={styles.preset}>
+          <Pressable disabled={busy} key={amount} onPress={() => void startPix(amount)} style={styles.preset}>
+            <Text style={styles.presetText}>PIX {formatCurrency(amount)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.section}>Crédito instantâneo DEMO</Text>
+      <View style={styles.presets}>
+        {PRESETS.map((amount) => (
+          <Pressable disabled={busy} key={`fast-${amount}`} onPress={() => void topUp(amount)} style={styles.preset}>
             <Text style={styles.presetText}>+ {formatCurrency(amount)}</Text>
           </Pressable>
         ))}
@@ -133,6 +184,18 @@ const styles = StyleSheet.create({
   balance: { color: colors.text, fontSize: 32, fontWeight: "700", marginTop: 8 },
   hint: { color: colors.muted, fontSize: 12, marginTop: 6 },
   error: { color: colors.danger, marginBottom: 8 },
+  section: { color: colors.muted, fontSize: 12, fontWeight: "700", marginBottom: 8 },
+  pixBox: {
+    backgroundColor: colors.card,
+    borderColor: colors.amber,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: 8,
+    marginBottom: 12,
+    padding: 12,
+  },
+  pixTitle: { color: colors.amber, fontWeight: "700" },
+  pixCopy: { color: colors.text, fontSize: 12 },
   presets: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   preset: {
     backgroundColor: colors.card,

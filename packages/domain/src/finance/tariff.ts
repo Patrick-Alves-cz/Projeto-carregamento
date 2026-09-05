@@ -5,7 +5,9 @@ export type TariffLike = {
   pricePerMinuteCents: number;
   idleFeeCents: number;
   connectionFeeCents: number;
+  parkingPriceCents?: number;
   minBalanceCents: number;
+  minimumChargeCents?: number;
   currency: string;
   active: boolean;
   validFrom: Date | null;
@@ -19,8 +21,11 @@ export type TariffSnapshot = {
   pricePerMinuteCents: number;
   idleFeeCents: number;
   connectionFeeCents: number;
+  parkingPriceCents: number;
   minBalanceCents: number;
+  minimumChargeCents: number;
   currency: string;
+  capturedAt: string;
 };
 
 export function isTariffEffective(tariff: TariffLike, now = new Date()): boolean {
@@ -44,7 +49,7 @@ export function pickEffectiveTariff(params: {
   return null;
 }
 
-export function toTariffSnapshot(tariff: TariffLike): TariffSnapshot {
+export function toTariffSnapshot(tariff: TariffLike, now = new Date()): TariffSnapshot {
   return {
     id: tariff.id,
     name: tariff.name,
@@ -52,8 +57,11 @@ export function toTariffSnapshot(tariff: TariffLike): TariffSnapshot {
     pricePerMinuteCents: tariff.pricePerMinuteCents,
     idleFeeCents: tariff.idleFeeCents,
     connectionFeeCents: tariff.connectionFeeCents,
+    parkingPriceCents: tariff.parkingPriceCents ?? 0,
     minBalanceCents: tariff.minBalanceCents,
+    minimumChargeCents: tariff.minimumChargeCents ?? 0,
     currency: tariff.currency,
+    capturedAt: now.toISOString(),
   };
 }
 
@@ -68,7 +76,10 @@ export function readTariffSnapshot(value: unknown): TariffSnapshot | null {
     pricePerMinuteCents: typeof record.pricePerMinuteCents === "number" ? record.pricePerMinuteCents : 0,
     idleFeeCents: typeof record.idleFeeCents === "number" ? record.idleFeeCents : 0,
     connectionFeeCents: typeof record.connectionFeeCents === "number" ? record.connectionFeeCents : 0,
+    parkingPriceCents: typeof record.parkingPriceCents === "number" ? record.parkingPriceCents : 0,
     minBalanceCents: typeof record.minBalanceCents === "number" ? record.minBalanceCents : 1000,
+    minimumChargeCents: typeof record.minimumChargeCents === "number" ? record.minimumChargeCents : 0,
     currency: typeof record.currency === "string" ? record.currency : "BRL",
+    capturedAt: typeof record.capturedAt === "string" ? record.capturedAt : new Date(0).toISOString(),
   };
 }

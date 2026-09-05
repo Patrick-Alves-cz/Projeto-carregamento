@@ -4,12 +4,14 @@ import {
   assertConnectorStatusTransition,
   assertSessionStatusTransition,
   assertVehicleConnectorCompatibility,
-  calculateCostCents,
+  calculateCurrentCost,
+  calculateFinalCost,
   ConflictError,
   ConnectorUnavailableError,
   ForbiddenError,
   NotFoundError,
   SessionStateError,
+  ValidationError,
   isSessionActive,
   readTariffSnapshot,
 } from "@evcharge/domain";
@@ -20,6 +22,7 @@ import {
   NotificationType,
   PaymentStatus,
   Prisma,
+  ReservationStatus,
   SessionStatus,
   SessionStopReason,
   UserRole,
@@ -30,6 +33,8 @@ import { AuthenticatedUser } from "../common/types/auth.types";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { ChargerProviderService } from "../charging/charger-provider.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { ReservationsService } from "../reservations/reservations.service";
+import { WaitlistService } from "../reservations/waitlist.service";
 import { TariffsService } from "../tariffs/tariffs.service";
 import { WalletService } from "../wallet/wallet.service";
 import { AuditLogger } from "../common/logging/audit-logger";
@@ -69,6 +74,11 @@ function isDeferred(outcome: unknown): outcome is { deferred: true } {
   return Boolean(outcome && typeof outcome === "object" && "deferred" in outcome && (outcome as { deferred?: boolean }).deferred);
 }
 
+function durationMinutes(startedAt: Date | null | undefined, endedAt = new Date()) {
+  if (!startedAt) return 0;
+  return Math.max(0, (endedAt.getTime() - startedAt.getTime()) / 60_000);
+}
+
 @Injectable()
 export class SessionsService {
   private readonly logger = new Logger(SessionsService.name);
@@ -82,6 +92,8 @@ export class SessionsService {
     private readonly events: ChargingEventsService,
     private readonly tariffsService: TariffsService,
     private readonly notifications: NotificationsService,
+    private readonly reservations: ReservationsService,
+    private readonly waitlist: WaitlistService,
   ) {}
 
   async start(input: StartSessionInput, user: AuthenticatedUser) {
@@ -116,6 +128,33 @@ export class SessionsService {
       throw new ConnectorUnavailableError("Carregador offline ou com falha");
     }
 
+    const reservation = input.reservationId
+      ? await this.prisma.reservation.findUnique({ where: { id: input.reservationId } })
+      : null;
+    if (input.reservationId && !reservation) throw new NotFoundError("Reservation", input.reservationId);
+    if (reservation) {
+      if (reservation.userId !== user.id) throw new ForbiddenError("Reserva de outro usuário");
+      if (
+        reservation.status !== ReservationStatus.CONFIRMED &&
+        reservation.status !== ReservationStatus.ACTIVE
+      ) {
+        throw new ValidationError("Esta reserva não está disponível para iniciar");
+      }
+      if (reservation.stationId !== charger.stationId) {
+        throw new ValidationError("Reserva não pertence a esta estação");
+      }
+      if (reservation.connectorId && reservation.connectorId !== input.connectorId) {
+        throw new ValidationError("Reserva não pertence a este conector");
+      }
+      const now = Date.now();
+      if (now < reservation.startAt.getTime() - 5 * 60_000) {
+        throw new ValidationError("Ainda não é horário desta reserva");
+      }
+      if (reservation.graceUntil && now > reservation.graceUntil.getTime()) {
+        throw new ValidationError("A janela da reserva já expirou");
+      }
+    }
+
     const { tariff: activeTariff, snapshot: tariffSnapshot } =
       await this.tariffsService.resolveForConnector(input.connectorId);
 
@@ -134,7 +173,11 @@ export class SessionsService {
         const lock = await tx.connector.updateMany({
           where: {
             id: input.connectorId,
-            status: ConnectorStatus.AVAILABLE,
+            status: {
+              in: reservation
+                ? [ConnectorStatus.AVAILABLE, ConnectorStatus.RESERVED]
+                : [ConnectorStatus.AVAILABLE],
+            },
             charger: {
               status: { in: [ChargerStatus.AVAILABLE, ChargerStatus.CHARGING, ChargerStatus.SUSPENDED] },
             },
@@ -175,6 +218,8 @@ export class SessionsService {
             tariffSnapshot,
             status: SessionStatus.PENDING,
             idempotencyKey: input.idempotencyKey,
+            reservationId: reservation?.id,
+            paymentKind: input.paymentKind ?? "WALLET",
           },
         });
 
@@ -317,6 +362,10 @@ export class SessionsService {
         payload: { sessionId: activeSession.id },
         dedupeKey: `session-started-${activeSession.id}`,
       });
+
+      if (reservation) {
+        await this.reservations.markActiveForSession(reservation.id);
+      }
 
       const started = await this.prisma.chargingSession.findUniqueOrThrow({
         where: { id: activeSession.id },
@@ -592,6 +641,7 @@ export class SessionsService {
         ? { stationId: query.stationId, station: stationScope }
         : { stationId: query.stationId };
     }
+    if (query.vehicleId) where.vehicleId = query.vehicleId;
 
     if (Object.keys(connectorWhere).length > 0) {
       where.connector = connectorWhere;
@@ -821,6 +871,10 @@ export class SessionsService {
       dedupeKey: `session-started-${started.id}`,
     });
 
+    if (started.reservationId) {
+      await this.reservations.markActiveForSession(started.reservationId);
+    }
+
     return this.enrichSession(
       await this.prisma.chargingSession.findUniqueOrThrow({
         where: { id: started.id },
@@ -849,11 +903,14 @@ export class SessionsService {
 
     const energyKwh = Math.max(Number(session.energyKwh), input.energyKwh);
     const snapshot = readTariffSnapshot(session.tariffSnapshot);
-    const energyCost = calculateCostCents(energyKwh, snapshot?.pricePerKwhCents ?? 0);
-    const costCents = Math.max(
-      session.costCents,
-      energyCost + (snapshot?.connectionFeeCents ?? 0),
-    );
+    const breakdown = snapshot
+      ? calculateFinalCost({
+          energyKwh,
+          durationMinutes: durationMinutes(session.startedAt, input.timestamp),
+          snapshot,
+        })
+      : null;
+    const costCents = Math.max(session.costCents, breakdown?.totalCents ?? session.costCents);
     const deltaCents = costCents - session.costCents;
     await this.prisma.$transaction(async (tx) => {
       await tx.chargingSession.update({
@@ -965,10 +1022,13 @@ export class SessionsService {
           data: {
             userId: session.userId,
             sessionId: session.id,
+            companyId: session.connector.charger.station.companyId,
             amountCents: updated.costCents,
             currency: "BRL",
             status: PaymentStatus.COMPLETED,
-            method: "WALLET_DEMO",
+            method: updated.paymentKind === "WALLET" ? "WALLET_DEMO" : updated.paymentKind,
+            kind: updated.paymentKind,
+            provider: "internal",
           },
         });
       }
@@ -981,6 +1041,16 @@ export class SessionsService {
           include: sessionInclude,
         }),
       );
+    }).then(async (completed) => {
+      try {
+        if (session.reservationId) {
+          await this.reservations.markCompletedForSession(session.reservationId);
+        }
+        await this.waitlist.notifyNext(session.connectorId);
+      } catch (error) {
+        this.logger.error(`Post-stop reservation/waitlist update failed for ${session.id}`, error);
+      }
+      return completed;
     });
   }
 
@@ -1063,6 +1133,13 @@ export class SessionsService {
     const durationSeconds = startedAt
       ? Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000))
       : 0;
+    const breakdown = snapshot
+      ? calculateFinalCost({
+          energyKwh: Number(session.energyKwh),
+          durationMinutes: durationMinutes(startedAt, endedAt),
+          snapshot,
+        })
+      : null;
     const dateKey = endedAt.toISOString().slice(0, 10).replace(/-/g, "");
     const payload = {
       brand: "EV Charge",
@@ -1078,10 +1155,15 @@ export class SessionsService {
       durationSeconds,
       energyKwh: Number(session.energyKwh),
       tariff: snapshot,
-      connectionFeeCents: snapshot?.connectionFeeCents ?? 0,
-      idleFeeCents: snapshot?.idleFeeCents ?? 0,
+      pricePerKwhCents: snapshot?.pricePerKwhCents ?? 0,
+      pricePerMinuteCents: snapshot?.pricePerMinuteCents ?? 0,
+      connectionFeeCents: breakdown?.sessionFeeCents ?? snapshot?.connectionFeeCents ?? 0,
+      idleFeeCents: breakdown?.idleCents ?? snapshot?.idleFeeCents ?? 0,
+      parkingCents: breakdown?.parkingCents ?? 0,
+      energyCents: breakdown?.energyCents ?? 0,
+      timeCents: breakdown?.timeCents ?? 0,
       totalCents: session.costCents,
-      paymentMethod: "Carteira DEMO",
+      paymentMethod: session.paymentKind === "WALLET" ? "Carteira DEMO" : session.paymentKind,
     };
     return tx.receipt.create({
       data: {
@@ -1113,6 +1195,13 @@ export class SessionsService {
     const walletBalanceCents = session.user.wallet?.balanceCents ?? 0;
     const remainingCents = Math.max(0, walletBalanceCents);
     const lowBalance = snapshot ? remainingCents < snapshot.minBalanceCents : false;
+    const costBreakdown = snapshot
+      ? calculateCurrentCost({
+          energyKwh: Number(session.energyKwh),
+          durationMinutes: durationMinutes(session.startedAt, session.endedAt ?? new Date()),
+          snapshot,
+        })
+      : null;
 
     return {
       ...session,
@@ -1120,6 +1209,7 @@ export class SessionsService {
       currentPowerKw: session.currentPowerKw ? Number(session.currentPowerKw) : null,
       currentVoltage: session.currentVoltage ? Number(session.currentVoltage) : null,
       currentAmperage: session.currentAmperage ? Number(session.currentAmperage) : null,
+      socPercent: session.socPercent != null ? Number(session.socPercent) : null,
       durationSeconds,
       station: session.connector.charger.station,
       charger: session.connector.charger,
@@ -1129,6 +1219,7 @@ export class SessionsService {
       walletBalanceCents,
       remainingCents,
       lowBalance,
+      costBreakdown,
       meterValues: session.meterValues?.map((mv) => ({
         ...mv,
         energyKwh: Number(mv.energyKwh),

@@ -27,6 +27,7 @@ const CONNECTOR_STATUS: Record<string, string> = {
   FINISHING: "Finalizando",
   UNAVAILABLE: "Indisponível",
   FAULTED: "Falha",
+  RESERVED: "Reservado",
   OFFLINE: "Offline",
 };
 
@@ -140,7 +141,7 @@ export function isChargerOnline(status: string) {
 }
 
 export function isConnectorOccupied(status: string) {
-  return ["PREPARING", "CHARGING", "SUSPENDED", "FINISHING", "OCCUPIED", "PAUSED"].includes(status);
+  return ["PREPARING", "CHARGING", "SUSPENDED", "FINISHING", "OCCUPIED", "PAUSED", "RESERVED"].includes(status);
 }
 
 export function availabilityCopy(available: number, total: number) {
@@ -150,9 +151,9 @@ export function availabilityCopy(available: number, total: number) {
 }
 
 export function ctaLabel(action: string) {
-  if (action === "CHARGE") return "Carregar aqui";
+  if (action === "CHARGE") return "Carregar agora";
   if (action === "INCOMPATIBLE") return "Conexão incompatível";
-  if (action === "OCCUPIED") return "Carregador ocupado";
+  if (action === "OCCUPIED") return "Ocupado · entrar na fila";
   return "Indisponível";
 }
 

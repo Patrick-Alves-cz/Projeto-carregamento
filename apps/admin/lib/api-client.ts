@@ -331,6 +331,8 @@ export interface Tariff {
   pricePerMinuteCents: number;
   idleFeeCents: number;
   connectionFeeCents: number;
+  parkingPriceCents?: number;
+  minimumChargeCents?: number;
   minBalanceCents: number;
   currency: string;
   validFrom: string | null;
@@ -349,6 +351,8 @@ export async function createTariff(input: {
   pricePerMinuteCents?: number;
   idleFeeCents?: number;
   connectionFeeCents?: number;
+  parkingPriceCents?: number;
+  minimumChargeCents?: number;
   minBalanceCents?: number;
 }) {
   return apiFetch<Tariff>("/tariffs", { method: "POST", body: JSON.stringify(input) });
@@ -439,10 +443,69 @@ export async function listOpsPayments() {
       id: string;
       amountCents: number;
       method: string;
+      status?: string;
+      kind?: string;
       createdAt: string;
       session: { connector: { charger: { station: { name: string } } }; user: { profile: { fullName: string } | null } } | null;
     }>
-  >("/ops/payments");
+  >("/payments");
+}
+
+export async function getFinanceSummary() {
+  return apiFetch<{
+    revenueCents: number;
+    todayCents: number;
+    monthCents: number;
+    energyKwh: number;
+    sessions: number;
+    averageTicketCents: number;
+    pendingPayments: number;
+    failedPayments: number;
+  }>("/finance/summary");
+}
+
+export async function listAdminReservations() {
+  return apiFetch<
+    Array<{
+      id: string;
+      status: string;
+      startAt: string;
+      endAt: string;
+      station: { name: string };
+      user: { email: string; profile: { fullName: string } | null };
+    }>
+  >("/reservations");
+}
+
+export async function cancelAdminReservation(id: string) {
+  return apiFetch(`/reservations/${id}/cancel`, { method: "POST" });
+}
+
+export async function listAdminWaitlist() {
+  return apiFetch<
+    Array<{
+      id: string;
+      status: string;
+      position: number;
+      station: { name: string };
+      user: { email: string; profile: { fullName: string } | null };
+    }>
+  >("/waitlist");
+}
+
+export async function listAdminPaymentMethods() {
+  return apiFetch<
+    Array<{
+      id: string;
+      brand: string;
+      last4: string;
+      expMonth: number;
+      expYear: number;
+      provider: string;
+      isDefault: boolean;
+      user: { email: string; profile: { fullName: string } | null };
+    }>
+  >("/payment-methods/admin");
 }
 
 export async function forgotPassword(email: string) {

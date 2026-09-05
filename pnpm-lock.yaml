@@ -120,6 +120,9 @@ importers:
       '@evcharge/ocpp':
         specifier: workspace:*
         version: link:../../packages/ocpp
+      '@evcharge/payment-provider':
+        specifier: workspace:*
+        version: link:../../packages/payment-provider
       '@evcharge/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -373,6 +376,15 @@ importers:
       zod:
         specifier: ^3.25.56
         version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.29
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.4
+        version: 4.23.13
+
+  packages/payment-provider:
     devDependencies:
       '@types/node':
         specifier: ^22.15.29

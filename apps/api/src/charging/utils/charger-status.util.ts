@@ -23,6 +23,7 @@ const CONNECTOR_TO_PROVIDER: Record<ConnectorStatus, ConnectorOperationalStatus>
   FINISHING: "finishing",
   UNAVAILABLE: "unavailable",
   FAULTED: "faulted",
+  RESERVED: "unavailable",
 };
 
 const PROVIDER_TO_CHARGER: Record<ChargerOperationalStatus, ChargerStatus> = {

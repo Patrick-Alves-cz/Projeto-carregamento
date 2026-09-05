@@ -7,7 +7,7 @@ import {
   isSessionTerminal,
   assertSessionStatusTransition,
 } from "./session-status";
-import { calculateCostCents } from "../finance/cost-calculator";
+import { calculateCostCents, calculateSessionCost } from "../finance/cost-calculator";
 import { InvalidStateTransitionError } from "../errors";
 
 describe("charger status transitions", () => {
@@ -36,6 +36,11 @@ describe("connector status transitions", () => {
       () => assertConnectorStatusTransition("AVAILABLE", "CHARGING"),
       InvalidStateTransitionError,
     );
+  });
+
+  it("allows AVAILABLE → RESERVED → PREPARING", () => {
+    assert.equal(canTransitionConnectorStatus("AVAILABLE", "RESERVED"), true);
+    assert.equal(canTransitionConnectorStatus("RESERVED", "PREPARING"), true);
   });
 });
 
@@ -66,5 +71,21 @@ describe("calculateCostCents", () => {
 
   it("returns 0 for zero energy", () => {
     assert.equal(calculateCostCents(0, 189), 0);
+  });
+
+  it("keeps energy-only totals when extra tariff lines are zero", () => {
+    const result = calculateSessionCost({
+      energyKwh: 10.42,
+      durationMinutes: 30,
+      snapshot: {
+        pricePerKwhCents: 189,
+        pricePerMinuteCents: 0,
+        idleFeeCents: 0,
+        connectionFeeCents: 0,
+        parkingPriceCents: 0,
+        minimumChargeCents: 0,
+      },
+    });
+    assert.equal(result.totalCents, 1969);
   });
 });

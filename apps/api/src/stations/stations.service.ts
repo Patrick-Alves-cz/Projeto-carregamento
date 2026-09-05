@@ -32,6 +32,7 @@ const OCCUPIED_STATUSES: ConnectorStatus[] = [
   ConnectorStatus.CHARGING,
   ConnectorStatus.SUSPENDED,
   ConnectorStatus.FINISHING,
+  ConnectorStatus.RESERVED,
 ];
 
 const OFFLINE_CHARGER_STATUSES = new Set(["OFFLINE", "FAULTED", "UNAVAILABLE"]);
@@ -341,6 +342,10 @@ export class StationsService {
       openingHoursLabel: openingHoursLabel(station.openingHours),
       chargerCount: station.chargers.length,
       availableConnectors: summary.availableConnectors,
+      occupiedConnectors: summary.occupiedConnectors,
+      reservedConnectors: summary.reservedConnectors,
+      offlineConnectors: summary.offlineConnectors,
+      faultedConnectors: summary.faultedConnectors,
       totalConnectors: summary.totalConnectors,
       crowded: summary.totalConnectors > 0 && summary.availableConnectors === 0,
       currentType: summary.currentType,
@@ -394,7 +399,10 @@ export class StationsService {
       availability: {
         totalConnectors: summary.totalConnectors,
         availableConnectors: summary.availableConnectors,
-        occupiedConnectors: summary.totalConnectors - summary.availableConnectors,
+        occupiedConnectors: summary.occupiedConnectors,
+        reservedConnectors: summary.reservedConnectors,
+        offlineConnectors: summary.offlineConnectors,
+        faultedConnectors: summary.faultedConnectors,
       },
       chargers: station.chargers.map((charger) => ({
         id: charger.id,
@@ -437,6 +445,19 @@ export class StationsService {
     const availableConnectors = connectors.filter(
       (connector) => connector.status === ConnectorStatus.AVAILABLE,
     ).length;
+    const occupiedConnectors = connectors.filter((connector) =>
+      OCCUPIED_STATUSES.includes(connector.status),
+    ).length;
+    const reservedConnectors = connectors.filter(
+      (connector) => connector.status === ConnectorStatus.RESERVED,
+    ).length;
+    const faultedConnectors = connectors.filter(
+      (connector) => connector.status === ConnectorStatus.FAULTED,
+    ).length;
+    const offlineConnectors = station.chargers.reduce((count, charger) => {
+      if (!OFFLINE_CHARGER_STATUSES.has(charger.status)) return count;
+      return count + charger.connectors.length;
+    }, 0);
     const types = connectors.map((connector) => connector.type);
     const lastSeenAt = station.chargers.reduce<Date | null>((latest, charger) => {
       if (!charger.lastSeenAt) return latest;
@@ -454,6 +475,10 @@ export class StationsService {
     return {
       totalConnectors,
       availableConnectors,
+      occupiedConnectors,
+      reservedConnectors,
+      faultedConnectors,
+      offlineConnectors,
       currentType: stationCurrentType(types),
       maxPowerKw: station.chargers.reduce(
         (max, charger) => Math.max(max, Number(charger.maxPowerKw)),

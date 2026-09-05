@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import {
-  calculateCostCents,
+  calculateCurrentCost,
   InsufficientBalanceError,
   isSessionActive,
   readTariffSnapshot,
@@ -24,6 +24,7 @@ import { ChargingEventsService } from "../charging/charging-events.service";
 import { ChargerProviderService } from "../charging/charger-provider.service";
 import { fromProviderChargerStatus, fromProviderConnectorStatus } from "../charging/utils/charger-status.util";
 import { NotificationsService } from "../notifications/notifications.service";
+import { WaitlistService } from "../reservations/waitlist.service";
 import { WalletService } from "../wallet/wallet.service";
 
 @Injectable()
@@ -38,6 +39,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly events: ChargingEventsService,
     private readonly walletService: WalletService,
     private readonly notifications: NotificationsService,
+    private readonly waitlist: WaitlistService,
   ) {}
 
   onModuleInit(): void {
@@ -74,11 +76,16 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
       if (!session || session.status !== SessionStatus.ACTIVE) return;
 
       const snapshot = readTariffSnapshot(session.tariffSnapshot);
-      const energyCost = calculateCostCents(
-        event.reading.energyKwh,
-        snapshot?.pricePerKwhCents ?? 0,
-      );
-      const costCents = energyCost + (snapshot?.connectionFeeCents ?? 0);
+      const durationMinutes = session.startedAt
+        ? Math.max(0, (Date.now() - session.startedAt.getTime()) / 60_000)
+        : 0;
+      const costCents = snapshot
+        ? calculateCurrentCost({
+            energyKwh: event.reading.energyKwh,
+            durationMinutes,
+            snapshot,
+          }).totalCents
+        : 0;
       const previousCostCents = session.costCents;
       const deltaCents = costCents - previousCostCents;
       let remainingAfter = session.user.wallet?.balanceCents ?? 0;
@@ -386,5 +393,10 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
         companyId: session.connector.charger.station.companyId,
       },
     });
+    try {
+      await this.waitlist.notifyNext(session.connectorId);
+    } catch (error) {
+      this.logger.error(`Waitlist notify failed after session ${sessionId}`, error);
+    }
   }
 }

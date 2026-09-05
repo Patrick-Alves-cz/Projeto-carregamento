@@ -3,6 +3,7 @@ import {
   ConflictError,
   NotFoundError,
   ValidationError,
+  calculateEstimatedCost,
   pickEffectiveTariff,
   toTariffSnapshot,
   type TariffLike,
@@ -20,7 +21,9 @@ function asTariffLike(tariff: {
   pricePerMinuteCents: number;
   idleFeeCents: number;
   connectionFeeCents: number;
+  parkingPriceCents?: number;
   minBalanceCents: number;
+  minimumChargeCents?: number;
   currency: string;
   active: boolean;
   validFrom: Date | null;
@@ -73,7 +76,9 @@ export class TariffsService {
         pricePerMinuteCents: input.pricePerMinuteCents,
         idleFeeCents: input.idleFeeCents,
         connectionFeeCents: input.connectionFeeCents,
+        parkingPriceCents: input.parkingPriceCents,
         minBalanceCents: input.minBalanceCents,
+        minimumChargeCents: input.minimumChargeCents,
         currency: input.currency,
         validFrom: input.validFrom ?? null,
         validTo: input.validTo ?? null,
@@ -139,6 +144,16 @@ export class TariffsService {
       throw new ValidationError("Nenhuma tarifa vigente encontrada para este conector");
     }
     return { tariff, snapshot: toTariffSnapshot(tariff), companyId: connector.charger.station.companyId };
+  }
+
+  async quote(connectorId: string, energyKwh: number, durationMinutes: number) {
+    const { tariff, snapshot } = await this.resolveForConnector(connectorId);
+    return {
+      tariff: { id: tariff.id, name: tariff.name, currency: tariff.currency },
+      snapshot,
+      estimate: calculateEstimatedCost({ energyKwh, durationMinutes, snapshot }),
+      demoPayments: (process.env.PAYMENT_PROVIDER ?? "mock") === "mock",
+    };
   }
 
   async assertCompanyTariff(tariffId: string, companyId: string) {
