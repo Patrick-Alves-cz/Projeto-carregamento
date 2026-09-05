@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import {
   calculateCurrentCost,
+  detectMeteringAnomaly,
   InsufficientBalanceError,
   isSessionActive,
   readTariffSnapshot,
@@ -75,6 +76,34 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
 
       if (!session || session.status !== SessionStatus.ACTIVE) return;
 
+      const anomaly = detectMeteringAnomaly({
+        previousEnergyKwh: Number(session.energyKwh),
+        energyKwh: event.reading.energyKwh,
+        powerKw: event.reading.powerKw,
+        maxPowerKw: Number(session.connector.maxPowerKw),
+      });
+      if (anomaly) {
+        const openKey = `METERING_ANOMALY:${session.connector.chargerId}:none:${session.id}`;
+        const existing = await this.prisma.incident.findUnique({ where: { openKey } });
+        if (existing) {
+          await this.prisma.incident.update({ where: { id: existing.id }, data: { lastSeenAt: new Date() } });
+        } else {
+          await this.prisma.incident.create({
+            data: {
+              companyId: session.connector.charger.station.companyId,
+              stationId: session.connector.charger.stationId,
+              chargerId: session.connector.chargerId,
+              sessionId: session.id,
+              type: "METERING_ANOMALY",
+              severity: "WARNING",
+              title: "Anomalia de medição",
+              description: `Padrão ${anomaly} na sessão.`,
+              openKey,
+            },
+          });
+        }
+      }
+
       const snapshot = readTariffSnapshot(session.tariffSnapshot);
       const durationMinutes = session.startedAt
         ? Math.max(0, (Date.now() - session.startedAt.getTime()) / 60_000)
@@ -100,6 +129,7 @@ export class SessionMeterProcessor implements OnModuleInit, OnModuleDestroy {
             currentAmperage: event.reading.current,
             costCents,
             socPercent: event.reading.socPercent,
+            lastMeterAt: new Date(),
           },
         });
 

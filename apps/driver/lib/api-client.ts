@@ -42,7 +42,7 @@ export interface Connector {
   idleFeeCents?: number;
   connectionFeeCents?: number;
   currency: string;
-  action: "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE";
+  action: "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE" | "MAINTENANCE";
 }
 
 export interface Charger {
@@ -60,6 +60,10 @@ export interface Reliability {
   lastCommunicationAt: string | null;
   lastUpdatedAt: string;
   availabilityPercent: number | null;
+  score?: number | null;
+  label?: string;
+  health?: string;
+  hint?: string;
 }
 
 export interface Station {
@@ -85,6 +89,10 @@ export interface Station {
   crowded: boolean;
   lastSeenAt: string | null;
   updatedAt: string;
+  availabilityState?: string;
+  availabilityLabel?: string;
+  freshness?: string;
+  inMaintenance?: boolean;
   reliability: Reliability;
   availability: {
     totalConnectors: number;
@@ -93,6 +101,7 @@ export interface Station {
     reservedConnectors?: number;
     offlineConnectors?: number;
     faultedConnectors?: number;
+    workingConnectors?: number;
   };
   chargers: Charger[];
 }
@@ -125,6 +134,9 @@ export interface NearbyStation {
   compatible: boolean | null;
   lastSeenAt: string | null;
   updatedAt: string;
+  availabilityState?: string;
+  freshness?: string;
+  inMaintenance?: boolean;
   reliability: Reliability;
 }
 
@@ -371,6 +383,8 @@ export interface ChargingSession {
   receipt?: { id: string; number: string; payload: ReceiptPayload } | null;
   meterValues?: Array<{ timestamp: string; energyKwh: number; powerKw: number }>;
   socPercent?: number | null;
+  visual?: { code: string; label: string };
+  freshness?: string;
   costBreakdown?: {
     energyCents: number;
     timeCents: number;
@@ -632,10 +646,11 @@ export interface WaitlistEntry {
   station?: { name: string };
 }
 
-export async function joinWaitlist(connectorId: string) {
+export async function joinWaitlist(input: { connectorId?: string; stationId?: string; connectorType?: string; scope?: string } | string) {
+  const body = typeof input === "string" ? { connectorId: input } : input;
   return apiFetch<WaitlistEntry>("/waitlist", {
     method: "POST",
-    body: JSON.stringify({ connectorId }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -83,8 +83,9 @@ export default function ChargingScreen() {
 
   const isActive = session.status === "ACTIVE";
   const isPaused = session.status === "PAUSED";
-  const live = isActive || isPaused;
+  const live = isActive || isPaused || session.status === "CHARGING_COMPLETE" || session.status === "IDLE";
   const isCompleted = session.status === "COMPLETED";
+  const visualLabel = session.visual?.label ?? sessionStatusLabel(session.status);
   const liveDuration =
     session.startedAt && live
       ? Math.floor((now - new Date(session.startedAt).getTime()) / 1000)
@@ -97,11 +98,9 @@ export default function ChargingScreen() {
       <View style={styles.hero}>
         <StatusChip
           color={isActive ? colors.primary : isPaused ? colors.amber : isCompleted ? colors.available : colors.amber}
-          label={isActive ? "CARREGANDO" : isPaused ? "PAUSADO" : sessionStatusLabel(session.status)}
+          label={visualLabel.toUpperCase()}
         />
-        <Text style={styles.heroTitle}>
-          {isActive ? "Em carregamento" : isPaused ? "Recarga pausada" : sessionStatusLabel(session.status)}
-        </Text>
+        <Text style={styles.heroTitle}>{visualLabel}</Text>
       </View>
 
       {live ? (
@@ -131,6 +130,7 @@ export default function ChargingScreen() {
         <Metric label="Energia" value={formatEnergy(session.energyKwh)} large />
         <Metric label="Potência" value={formatPower(isPaused ? 0 : session.currentPowerKw ?? 0)} large />
         <Metric label="Custo" value={formatCurrency(session.costCents)} large highlight />
+        {session.socPercent != null ? <Metric label="Bateria" value={`${Math.round(session.socPercent)}%`} large /> : null}
       </View>
 
       <View style={styles.card}>

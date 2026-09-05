@@ -87,7 +87,8 @@ describeIfDb("Phase 2.2 discovery", () => {
     assert.ok(res.body.every((s: { distanceKm: number }) => s.distanceKm <= 10));
     assert.ok("pricePerKwhCents" in res.body[0]);
     assert.ok("availableConnectors" in res.body[0]);
-    assert.equal(res.body[0].reliability.availabilityPercent, null);
+    assert.equal(typeof res.body[0].reliability.score, "number");
+    assert.ok(res.body[0].reliability.score >= 0 && res.body[0].reliability.score <= 100);
     assert.ok(!("chargers" in res.body[0]));
   });
 
@@ -189,7 +190,7 @@ describeIfDb("Phase 2.2 discovery", () => {
     const connector = detail.body.chargers.flatMap(
       (c: { connectors: { id: string; action: string }[] }) => c.connectors,
     )[0];
-    assert.equal(connector.action, "UNAVAILABLE");
+    assert.equal(connector.action, "MAINTENANCE");
   });
 
   it("rejects starting on an occupied connector", async () => {

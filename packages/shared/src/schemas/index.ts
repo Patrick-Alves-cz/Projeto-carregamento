@@ -10,3 +10,4 @@ export * from "./tariff";
 export * from "./wallet";
 export * from "./invitation";
 export * from "./payments";
+export * from "./operations";

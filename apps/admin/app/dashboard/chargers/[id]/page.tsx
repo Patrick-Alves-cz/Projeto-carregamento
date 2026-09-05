@@ -88,6 +88,8 @@ export default function ChargerDetailPage() {
         <Badge variant={data.ocppOnline ? "default" : "secondary"}>
           {data.ocppOnline ? "ONLINE" : "OFFLINE"}
         </Badge>
+        <Badge variant="outline">{data.healthStatus ?? "—"}</Badge>
+        <Badge variant="outline">Confiabilidade {data.reliabilityScore ?? "—"}</Badge>
         <StatusBadge kind="charger" status={data.status} />
       </div>
 
@@ -259,6 +261,48 @@ export default function ChargerDetailPage() {
           ) : null}
         </CardContent>
       </Card>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Comandos</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(data.commands ?? []).map((item) => (
+              <p key={item.id}>
+                {item.type} · {item.status}
+              </p>
+            ))}
+            {(data.commands ?? []).length === 0 ? <p className="text-muted-foreground">Nenhum comando.</p> : null}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Incidentes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(data.incidents ?? []).map((item) => (
+              <p key={item.id}>
+                {item.title} · {item.status}
+              </p>
+            ))}
+            {(data.incidents ?? []).length === 0 ? <p className="text-muted-foreground">Nenhum incidente.</p> : null}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Manutenção</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {(data.maintenanceWindows ?? []).map((item) => (
+              <p key={item.id}>
+                {item.reason} · {item.status}
+              </p>
+            ))}
+            {(data.maintenanceWindows ?? []).length === 0 ? <p className="text-muted-foreground">Sem janelas.</p> : null}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

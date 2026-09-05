@@ -32,6 +32,7 @@ const LIVE_RESERVATION: ReservationStatus[] = [
 export class ReservationsService {
   private readonly audit = new AuditLogger(new Logger(ReservationsService.name));
   private readonly graceMinutes = Number(process.env.RESERVATION_GRACE_MINUTES ?? 15);
+  private readonly earlyMinutes = Number(process.env.RESERVATION_EARLY_CHECKIN_MINUTES ?? 10);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -79,6 +80,22 @@ export class ReservationsService {
       if (connector.charger.status === ChargerStatus.OFFLINE) {
         throw new ValidationError("Carregador offline");
       }
+    }
+    const now = new Date();
+    const maintenance = await this.prisma.maintenanceWindow.findFirst({
+      where: {
+        status: "ACTIVE",
+        startsAt: { lte: now },
+        endsAt: { gte: now },
+        OR: [
+          { stationId: station.id },
+          connector?.chargerId ? { chargerId: connector.chargerId } : undefined,
+          connector?.id ? { connectorId: connector.id } : undefined,
+        ].filter(Boolean) as Array<{ stationId: string } | { chargerId: string } | { connectorId: string }>,
+      },
+    });
+    if (maintenance) {
+      throw new ValidationError("Temporariamente indisponível para manutenção.", "MAINTENANCE");
     }
 
     const reservation = await this.prisma.$transaction(async (tx) => {
@@ -132,9 +149,9 @@ export class ReservationsService {
       entityType: "reservation",
       entityId: reservation.id,
       timestamp: new Date(),
-      payload: { reservationId: reservation.id, userId: user.id, companyId: station.companyId },
+      payload: { reservationId: reservation.id, companyId: station.companyId },
     });
-    return reservation;
+    return this.withWindow(reservation);
   }
 
   async mine(user: AuthenticatedUser) {
@@ -144,7 +161,7 @@ export class ReservationsService {
       include: { station: true, connector: true, vehicle: true },
       orderBy: { startAt: "desc" },
       take: 50,
-    });
+    }).then((items) => items.map((item) => this.withWindow(item)));
   }
 
   async listAdmin(user: AuthenticatedUser) {
@@ -287,5 +304,16 @@ export class ReservationsService {
       },
       data: { status: ReservationStatus.COMPLETED },
     });
+  }
+
+  private withWindow<T extends { startAt: Date; graceUntil: Date | null }>(reservation: T) {
+    const checkInFrom = new Date(reservation.startAt.getTime() - this.earlyMinutes * 60_000);
+    const checkInUntil = reservation.graceUntil ?? new Date(reservation.startAt.getTime() + this.graceMinutes * 60_000);
+    return {
+      ...reservation,
+      checkInFrom,
+      checkInUntil,
+      checkInLabel: `Você pode iniciar entre ${checkInFrom.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} e ${checkInUntil.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`,
+    };
   }
 }

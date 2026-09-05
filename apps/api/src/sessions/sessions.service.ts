@@ -14,6 +14,8 @@ import {
   ValidationError,
   isSessionActive,
   readTariffSnapshot,
+  sessionVisualState,
+  communicationFreshness,
 } from "@evcharge/domain";
 import type { ListSessionsQuery, StartSessionInput } from "@evcharge/shared";
 import {
@@ -61,6 +63,8 @@ const ACTIVE_STATUSES: SessionStatus[] = [
   SessionStatus.PREPARING,
   SessionStatus.ACTIVE,
   SessionStatus.PAUSED,
+  SessionStatus.CHARGING_COMPLETE,
+  SessionStatus.IDLE,
 ];
 
 type SessionWithInclude = Prisma.ChargingSessionGetPayload<{ include: typeof sessionInclude }>;
@@ -77,6 +81,12 @@ function isDeferred(outcome: unknown): outcome is { deferred: true } {
 function durationMinutes(startedAt: Date | null | undefined, endedAt = new Date()) {
   if (!startedAt) return 0;
   return Math.max(0, (endedAt.getTime() - startedAt.getTime()) / 60_000);
+}
+
+function idleMinutes(session: { idleStartedAt?: Date | null; endedAt?: Date | null }) {
+  if (!session.idleStartedAt) return 0;
+  const end = session.endedAt ?? new Date();
+  return Math.max(0, (end.getTime() - session.idleStartedAt.getTime()) / 60_000);
 }
 
 @Injectable()
@@ -124,8 +134,26 @@ export class SessionsService {
     assertVehicleConnectorCompatibility(vehicle.connectorTypes, connectorSnapshot.type);
 
     const { charger } = connectorSnapshot;
+    const maintenance = await this.prisma.maintenanceWindow.findFirst({
+      where: {
+        status: "ACTIVE",
+        startsAt: { lte: new Date() },
+        endsAt: { gte: new Date() },
+        OR: [
+          { stationId: charger.stationId },
+          { chargerId: charger.id },
+          { connectorId: connectorSnapshot.id },
+        ],
+      },
+    });
+    if (maintenance) {
+      throw new ConnectorUnavailableError("Temporariamente indisponível para manutenção.", "MAINTENANCE");
+    }
     if (charger.status === ChargerStatus.OFFLINE || charger.status === ChargerStatus.FAULTED) {
-      throw new ConnectorUnavailableError("Carregador offline ou com falha");
+      throw new ConnectorUnavailableError(
+        "Este carregador está temporariamente indisponível.",
+        charger.status === ChargerStatus.FAULTED ? "CHARGER_FAULTED" : "CHARGER_OFFLINE",
+      );
     }
 
     const reservation = input.reservationId
@@ -147,11 +175,12 @@ export class SessionsService {
         throw new ValidationError("Reserva não pertence a este conector");
       }
       const now = Date.now();
-      if (now < reservation.startAt.getTime() - 5 * 60_000) {
-        throw new ValidationError("Ainda não é horário desta reserva");
+      const earlyMinutes = Number(process.env.RESERVATION_EARLY_CHECKIN_MINUTES ?? 10);
+      if (now < reservation.startAt.getTime() - earlyMinutes * 60_000) {
+        throw new ValidationError("Você ainda não está na janela para iniciar esta reserva.", "RESERVATION_WINDOW");
       }
       if (reservation.graceUntil && now > reservation.graceUntil.getTime()) {
-        throw new ValidationError("A janela da reserva já expirou");
+        throw new ValidationError("A janela da reserva já expirou.", "RESERVATION_EXPIRED");
       }
     }
 
@@ -253,12 +282,20 @@ export class SessionsService {
       sessionId = created.id;
       const idTag = created.idTag ?? makeIdTag(created.id);
 
-      const outcome = await this.chargerProviderService.startCharging(
-        charger.id,
-        connectorSnapshot.number,
-        created.id,
-        { idTag },
-      );
+      let outcome: unknown;
+      try {
+        outcome = await this.chargerProviderService.startCharging(
+          charger.id,
+          connectorSnapshot.number,
+          created.id,
+          { idTag },
+        );
+      } catch {
+        throw new ConnectorUnavailableError(
+          "Não foi possível iniciar o carregamento. Tente novamente ou escolha outro conector.",
+          "REMOTE_START_REJECTED",
+        );
+      }
 
       const afterCommand = await this.prisma.chargingSession.findUniqueOrThrow({
         where: { id: created.id },
@@ -907,6 +944,7 @@ export class SessionsService {
       ? calculateFinalCost({
           energyKwh,
           durationMinutes: durationMinutes(session.startedAt, input.timestamp),
+          idleMinutes: idleMinutes(session),
           snapshot,
         })
       : null;
@@ -1137,6 +1175,7 @@ export class SessionsService {
       ? calculateFinalCost({
           energyKwh: Number(session.energyKwh),
           durationMinutes: durationMinutes(startedAt, endedAt),
+          idleMinutes: idleMinutes(session),
           snapshot,
         })
       : null;
@@ -1195,10 +1234,17 @@ export class SessionsService {
     const walletBalanceCents = session.user.wallet?.balanceCents ?? 0;
     const remainingCents = Math.max(0, walletBalanceCents);
     const lowBalance = snapshot ? remainingCents < snapshot.minBalanceCents : false;
+    const freshness = communicationFreshness({
+      connected: session.connector.charger.status !== "OFFLINE",
+      lastMessageAt: session.lastMeterAt ?? session.connector.charger.lastMessageAt,
+      lastSeenAt: session.connector.charger.lastSeenAt,
+    });
     const costBreakdown = snapshot
       ? calculateCurrentCost({
           energyKwh: Number(session.energyKwh),
           durationMinutes: durationMinutes(session.startedAt, session.endedAt ?? new Date()),
+          idleMinutes: idleMinutes(session),
+          chargingComplete: session.status === SessionStatus.CHARGING_COMPLETE || session.status === SessionStatus.IDLE,
           snapshot,
         })
       : null;
@@ -1220,6 +1266,14 @@ export class SessionsService {
       remainingCents,
       lowBalance,
       costBreakdown,
+      visual: sessionVisualState({
+        status: session.status,
+        communicationStale:
+          freshness === "STALE" || freshness === "OFFLINE",
+        chargingComplete: session.status === SessionStatus.CHARGING_COMPLETE,
+        idle: session.status === SessionStatus.IDLE,
+      }),
+      freshness,
       meterValues: session.meterValues?.map((mv) => ({
         ...mv,
         energyKwh: Number(mv.energyKwh),

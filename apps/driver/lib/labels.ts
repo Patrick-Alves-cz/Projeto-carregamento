@@ -33,9 +33,11 @@ const CONNECTOR_STATUS: Record<string, string> = {
 
 const SESSION_STATUS: Record<string, string> = {
   PENDING: "Pendente",
-  PREPARING: "Preparando",
-  ACTIVE: "Em carregamento",
-  PAUSED: "Pausada",
+  PREPARING: "Preparando carregador",
+  ACTIVE: "Carregando",
+  PAUSED: "Pausado",
+  CHARGING_COMPLETE: "Carregamento concluído",
+  IDLE: "Veículo ainda conectado",
   COMPLETED: "Concluída",
   FAILED: "Falhou",
   CANCELLED: "Cancelada",
@@ -144,7 +146,13 @@ export function isConnectorOccupied(status: string) {
   return ["PREPARING", "CHARGING", "SUSPENDED", "FINISHING", "OCCUPIED", "PAUSED", "RESERVED"].includes(status);
 }
 
-export function availabilityCopy(available: number, total: number) {
+export function availabilityCopy(available: number, total: number, state?: string) {
+  if (state === "MAINTENANCE") return "Em manutenção";
+  if (state === "OFFLINE") return "Offline";
+  if (state === "FAULTED") return "Com falha";
+  if (state === "BUSY") return "Ocupada";
+  if (state === "RESERVED") return "Reservada";
+  if (state === "LIMITED") return "Disponibilidade limitada";
   if (total === 0) return "Sem conectores";
   if (available === 0) return "ESTAÇÃO LOTADA";
   return `${available} de ${total} disponíveis`;
@@ -154,6 +162,7 @@ export function ctaLabel(action: string) {
   if (action === "CHARGE") return "Carregar agora";
   if (action === "INCOMPATIBLE") return "Conexão incompatível";
   if (action === "OCCUPIED") return "Ocupado · entrar na fila";
+  if (action === "MAINTENANCE") return "Em manutenção";
   return "Indisponível";
 }
 

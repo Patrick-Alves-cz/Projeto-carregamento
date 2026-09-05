@@ -18,6 +18,7 @@ import { InvitationsModule } from "./invitations/invitations.module";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { OcppModule } from "./ocpp/ocpp.module";
 import { OpsModule } from "./ops/ops.module";
+import { OperationsModule } from "./operations/operations.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { SessionsModule } from "./sessions/sessions.module";
 import { StationsModule } from "./stations/stations.module";
@@ -38,6 +39,7 @@ import { ReservationsModule } from "./reservations/reservations.module";
     InvitationsModule,
     NotificationsModule,
     OpsModule,
+    OperationsModule,
     TariffsModule,
     WalletModule,
     PaymentsModule,

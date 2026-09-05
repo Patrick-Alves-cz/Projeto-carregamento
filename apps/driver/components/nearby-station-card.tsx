@@ -40,8 +40,14 @@ export function NearbyStationCard({
         {station.city ? ` · ${station.city}` : ""}
       </Text>
       <Text style={[styles.availability, crowded && styles.full]}>
-        {availabilityCopy(station.availableConnectors, station.totalConnectors)}
+        {availabilityCopy(station.availableConnectors, station.totalConnectors, station.availabilityState)}
       </Text>
+      {station.reliability?.label ? (
+        <Text style={styles.metaText}>
+          {station.reliability.label}
+          {station.reliability.score != null ? ` · ${station.reliability.score}%` : ""}
+        </Text>
+      ) : null}
       <View style={styles.meta}>
         {current ? <Text style={styles.metaText}>{current}</Text> : null}
         {station.maxPowerKw > 0 ? (

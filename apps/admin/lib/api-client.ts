@@ -277,7 +277,12 @@ export interface ChargerEvent {
 }
 
 export interface OcppChargerDetail extends Charger {
+  healthStatus?: string;
+  reliabilityScore?: number;
   events: ChargerEvent[];
+  commands?: Array<{ id: string; type: string; status: string; createdAt: string; errorMessageSanitized?: string | null }>;
+  incidents?: Array<{ id: string; title: string; status: string; severity: string; lastSeenAt: string }>;
+  maintenanceWindows?: Array<{ id: string; reason: string; status: string; startsAt: string; endsAt: string }>;
   currentTransaction: {
     id: string;
     ocppTransactionId: number;
@@ -435,6 +440,103 @@ export async function getOpsSummary() {
     energyKwh: number;
     activeCustomers: number;
   }>("/ops/summary");
+}
+
+export async function getOperationsSummary() {
+  return apiFetch<{
+    stations: number;
+    chargers: number;
+    onlineChargers: number;
+    healthy: number;
+    degraded: number;
+    unstable: number;
+    offline: number;
+    faulted: number;
+    activeSessions: number;
+    openIncidents: number;
+    activeReservations: number;
+    waitlist: number;
+    failedCommands24h: number;
+    uptimePercent: number;
+    reliabilityAverage: number;
+    mttrMinutes: number;
+    averageSessionMinutes: number;
+    averageEnergyKwh: number;
+  }>("/operations/summary");
+}
+
+export async function listIncidents(params?: { status?: string; severity?: string; chargerId?: string }) {
+  const query = new URLSearchParams();
+  if (params?.status) query.set("status", params.status);
+  if (params?.severity) query.set("severity", params.severity);
+  if (params?.chargerId) query.set("chargerId", params.chargerId);
+  const qs = query.toString();
+  return apiFetch<
+    Array<{
+      id: string;
+      type: string;
+      severity: string;
+      status: string;
+      title: string;
+      description: string;
+      lastSeenAt: string;
+      station: { name: string };
+      charger?: { identity: string } | null;
+    }>
+  >(`/incidents${qs ? `?${qs}` : ""}`);
+}
+
+export async function acknowledgeIncident(id: string) {
+  return apiFetch(`/incidents/${id}/acknowledge`, { method: "POST" });
+}
+
+export async function resolveIncident(id: string, resolution: string, status: "RESOLVED" | "IGNORED" = "RESOLVED") {
+  return apiFetch(`/incidents/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ resolution, status }),
+  });
+}
+
+export async function listMaintenance() {
+  return apiFetch<
+    Array<{
+      id: string;
+      reason: string;
+      status: string;
+      startsAt: string;
+      endsAt: string;
+      station?: { name: string } | null;
+      charger?: { identity: string } | null;
+    }>
+  >("/maintenance");
+}
+
+export async function createMaintenance(input: {
+  stationId?: string;
+  chargerId?: string;
+  connectorId?: string;
+  startsAt: string;
+  endsAt: string;
+  reason: string;
+}) {
+  return apiFetch("/maintenance", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function cancelMaintenance(id: string) {
+  return apiFetch(`/maintenance/${id}/cancel`, { method: "POST" });
+}
+
+export async function listReconciliation() {
+  return apiFetch<
+    Array<{
+      id: string;
+      reason: string;
+      status: string;
+      classification: string;
+      detectedAt: string;
+      charger: { identity: string };
+    }>
+  >("/operations/reconciliation");
 }
 
 export async function listOpsPayments() {

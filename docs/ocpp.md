@@ -64,7 +64,7 @@ Do backend (CALL):
 | RemoteStartTransaction | Driver start **ou** admin |
 | RemoteStopTransaction | Driver/Admin stop |
 | Reset | Admin |
-| ChangeAvailability | Admin (preparado) |
+| ChangeAvailability | Admin (comando registrado, timeout e reconciliação) |
 
 Não implementado nesta fase: OCPP 2.0.1 / 2.1, demais comandos 1.6.
 
@@ -87,9 +87,9 @@ Encerramento financeiro só após `StopTransaction`, não após o envio de `Remo
 
 ## Reconciliação
 
-`OcppWatchdog` marca OFFLINE se `lastSeenAt` passar do threshold (`OCPP_OFFLINE_THRESHOLD_MS`, default 180s), mesmo sem evento `close` do WebSocket.
+`OcppWatchdog` marca OFFLINE se `lastSeenAt` passar do threshold (`OCPP_OFFLINE_THRESHOLD_MS`, default 180s), mesmo sem evento `close` do WebSocket. A Fase 6 classifica sessões presas como `RECOVERABLE`, `REQUIRES_RECONCILIATION` ou `CRITICAL` e abre `ReconciliationCase` **sem encerrar** a sessão automaticamente.
 
-`OcppReconciliationService` registra `session.needs_reconciliation` quando há sessão ACTIVE/PREPARING/PAUSED e o charger OCPP está desconectado. **Não** encerra a sessão só porque o frontend ou o socket caiu.
+Health interno (`HEALTHY`/`DEGRADED`/…) é calculado à parte do OCPP. Ver [docs/charger-health.md](charger-health.md).
 
 ## Como testar
 

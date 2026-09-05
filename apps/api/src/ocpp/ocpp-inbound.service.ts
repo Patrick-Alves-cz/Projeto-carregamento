@@ -36,9 +36,16 @@ export class OcppInboundService {
   }
 
   async markConnected(chargerId: string, companyId: string) {
+    const charger = await this.prisma.charger.findUnique({ where: { id: chargerId } });
+    const reconnect = charger && charger.lastSeenAt && Date.now() - charger.lastSeenAt.getTime() < 24 * 60 * 60_000;
     await this.prisma.charger.update({
       where: { id: chargerId },
-      data: { lastSeenAt: new Date(), protocol: "ocpp1.6" },
+      data: {
+        lastSeenAt: new Date(),
+        lastMessageAt: new Date(),
+        protocol: "ocpp1.6",
+        reconnectCount24h: reconnect ? { increment: 1 } : 0,
+      },
     });
     await this.events.publish({
       type: "charger.connected",
@@ -92,6 +99,8 @@ export class OcppInboundService {
         firmwareVersion: boot.firmwareVersion,
         chargePointSerialNumber: boot.chargePointSerialNumber,
         lastSeenAt: new Date(),
+        lastMessageAt: new Date(),
+        lastBootAt: new Date(),
         protocol: "ocpp1.6",
       },
     });
@@ -136,7 +145,7 @@ export class OcppInboundService {
   async heartbeat(chargerId: string, companyId: string) {
     await this.prisma.charger.update({
       where: { id: chargerId },
-      data: { lastSeenAt: new Date() },
+      data: { lastSeenAt: new Date(), lastHeartbeatAt: new Date(), lastMessageAt: new Date() },
     });
     await this.events.publish({
       type: "charger.heartbeat",
@@ -211,6 +220,7 @@ export class OcppInboundService {
       where: { id: chargerId },
       data: {
         lastSeenAt: new Date(),
+        lastMessageAt: new Date(),
         status:
           next === ConnectorStatus.FAULTED
             ? ChargerStatus.FAULTED
@@ -225,6 +235,18 @@ export class OcppInboundService {
                     : ChargerStatus.AVAILABLE,
       },
     });
+
+    if (next === ConnectorStatus.FINISHING || next === ConnectorStatus.SUSPENDED) {
+      const live = await this.prisma.chargingSession.findFirst({
+        where: { connectorId: connector.id, status: SessionStatus.ACTIVE },
+      });
+      if (live) {
+        await this.prisma.chargingSession.update({
+          where: { id: live.id },
+          data: { status: SessionStatus.CHARGING_COMPLETE, chargingCompletedAt: new Date() },
+        });
+      }
+    }
 
     if (next === ConnectorStatus.FAULTED) {
       await this.events.publish({

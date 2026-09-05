@@ -74,6 +74,10 @@ export class OcppConnectionManager {
     return [...this.connections.values()].filter((item) => item.lastMessageAt.getTime() < cutoff);
   }
 
+  onlineIds(): string[] {
+    return [...this.connections.keys()].filter((id) => this.isOnline(id));
+  }
+
   sendRaw(chargerId: string, payload: string) {
     const conn = this.connections.get(chargerId);
     if (!conn || conn.ws.readyState !== 1) {

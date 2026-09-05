@@ -234,6 +234,9 @@ pnpm --filter @evcharge/charger-simulator dev -- --mode mock --scenario FAST --m
 
 ## Fase atual
 
-**Fase 5 — Pagamento, reservas e experiência do motorista**: `PaymentProvider` mock (PIX/cartão DEMO), snapshot de tarifa, reservas, fila, favoritos e telas Admin/Driver. OCPP 1.6J da Fase 4 permanece.
+**Fase 6 — Operação inteligente**: saúde do carregador, reliability, incidentes, manutenção, ChangeAvailability com histórico de comandos, watchdog/reconciliação, fila inteligente e UX operacional.
 
-Não iniciar Fase 6 automaticamente.
+Documentação: [docs/operations.md](docs/operations.md) · [docs/charger-health.md](docs/charger-health.md) · [docs/incidents.md](docs/incidents.md)
+
+Não iniciar Fase 7 automaticamente.
+

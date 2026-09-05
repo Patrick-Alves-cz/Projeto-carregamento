@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 import { UserRole } from "@prisma/client";
-import { joinWaitlistSchema } from "@evcharge/shared";
+import { joinWaitlistSchema, type JoinWaitlistInput } from "@evcharge/shared";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/auth.decorators";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
@@ -20,8 +20,7 @@ export class WaitlistController {
     @Body(new ZodValidationPipe(joinWaitlistSchema)) body: unknown,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const input = body as { connectorId: string };
-    return this.waitlist.join(user, input.connectorId);
+    return this.waitlist.join(user, body as JoinWaitlistInput);
   }
 
   @Get("me")

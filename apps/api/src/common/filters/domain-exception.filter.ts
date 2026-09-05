@@ -47,7 +47,7 @@ export class DomainExceptionFilter implements ExceptionFilter {
 
     if (exception instanceof ValidationError) {
       response.status(HttpStatus.BAD_REQUEST).json({
-        code: exception.code,
+        code: exception.driverCode ?? exception.code,
         message: exception.message,
       });
       return;

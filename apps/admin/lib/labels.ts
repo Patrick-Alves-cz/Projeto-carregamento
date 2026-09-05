@@ -35,6 +35,8 @@ const SESSION_STATUS: Record<string, string> = {
   PREPARING: "Preparando",
   ACTIVE: "Em andamento",
   PAUSED: "Pausada",
+  CHARGING_COMPLETE: "Carga concluída",
+  IDLE: "Permanência",
   COMPLETED: "Concluída",
   FAILED: "Falhou",
   CANCELLED: "Cancelada",

@@ -9,7 +9,8 @@ import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { AuthenticatedUser } from "../common/types/auth.types";
 import { TenantAccessService } from "../common/services/tenant-access.service";
 import { PrismaService } from "../common/database/database.module";
-import { OcppCommandAdapter } from "./ocpp-command.adapter";
+import { ChargerCommandsService } from "./charger-commands.service";
+import { ChargerCommandType } from "@prisma/client";
 import { OcppConnectionManager } from "./ocpp-connection.manager";
 import { ChargingEventsService } from "../charging/charging-events.service";
 import { AuditLogger } from "../common/logging/audit-logger";
@@ -33,7 +34,7 @@ export class OcppOpsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenant: TenantAccessService,
-    private readonly commands: OcppCommandAdapter,
+    private readonly commandLog: ChargerCommandsService,
     private readonly connections: OcppConnectionManager,
     private readonly events: ChargingEventsService,
   ) {}
@@ -43,16 +44,40 @@ export class OcppOpsController {
   @ApiOperation({ summary: "OCPP charger detail" })
   async detail(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     const charger = await this.loadCharger(id, user);
-    const events = await this.prisma.chargerEvent.findMany({
-      where: { chargerId: id },
-      orderBy: { createdAt: "desc" },
-      take: 30,
-    });
-    const liveTx = await this.prisma.ocppTransaction.findFirst({
-      where: { chargerId: id, stoppedAt: null },
-      include: { session: true },
-    });
-    return { ...this.withConnection(charger), events, currentTransaction: liveTx };
+    const [events, liveTx, commands, incidents, maintenance] = await Promise.all([
+      this.prisma.chargerEvent.findMany({
+        where: { chargerId: id, category: "OPERATIONAL" },
+        orderBy: { createdAt: "desc" },
+        take: 40,
+      }),
+      this.prisma.ocppTransaction.findFirst({
+        where: { chargerId: id, stoppedAt: null },
+        include: { session: true },
+      }),
+      this.prisma.chargerCommand.findMany({
+        where: { chargerId: id },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      this.prisma.incident.findMany({
+        where: { chargerId: id },
+        orderBy: { lastSeenAt: "desc" },
+        take: 10,
+      }),
+      this.prisma.maintenanceWindow.findMany({
+        where: { chargerId: id },
+        orderBy: { startsAt: "desc" },
+        take: 10,
+      }),
+    ]);
+    return {
+      ...this.withConnection(charger),
+      events,
+      currentTransaction: liveTx,
+      commands,
+      incidents,
+      maintenanceWindows: maintenance,
+    };
   }
 
   @Post(":id/ocpp/command")
@@ -69,40 +94,17 @@ export class OcppOpsController {
       throw new ValidationError("Motoristas não enviam comandos OCPP");
     }
 
-    let accepted = false;
-    try {
-      switch (input.action) {
-        case "REMOTE_START":
-          if (!input.connectorNumber || !input.idTag) {
-            throw new ValidationError("connectorNumber e idTag são obrigatórios");
-          }
-          accepted = await this.commands.remoteStart(id, input.connectorNumber, input.idTag);
-          break;
-        case "REMOTE_STOP": {
-          const txId = await this.commands.lookupTransactionId(id, input.connectorNumber ?? 1);
-          if (txId == null) throw new ValidationError("Nenhuma transação OCPP ativa");
-          accepted = await this.commands.remoteStop(id, txId);
-          break;
-        }
-        case "RESET":
-          accepted = await this.commands.reset(id, input.resetType ?? "Soft");
-          break;
-        case "CHANGE_AVAILABILITY":
-          if (!input.connectorNumber || !input.availability) {
-            throw new ValidationError("connectorNumber e availability são obrigatórios");
-          }
-          accepted = await this.commands.changeAvailability(id, input.connectorNumber, input.availability);
-          break;
-      }
-    } catch (error) {
-      this.audit.warn("ocpp.command.rejected", {
-        chargerId: id,
-        action: input.action,
-        userId: user.id,
-        result: "error",
-      });
-      throw error;
-    }
+    const result = await this.commandLog.execute({
+      chargerId: id,
+      type: input.action as ChargerCommandType,
+      connectorNumber: input.connectorNumber,
+      availability: input.availability,
+      idTag: input.idTag,
+      resetType: input.resetType,
+      userId: user.id,
+      confirm: true,
+    });
+    const accepted = result.accepted;
 
     this.audit.info(accepted ? "ocpp.command.accepted" : "ocpp.command.rejected", {
       chargerId: id,
@@ -126,14 +128,7 @@ export class OcppOpsController {
         },
       });
     }
-    await this.prisma.chargerEvent.create({
-      data: {
-        chargerId: id,
-        type: `command.${input.action.toLowerCase()}`,
-        payload: { userId: user.id, accepted },
-      },
-    });
-    return { chargerId: id, action: input.action, accepted };
+    return { chargerId: id, action: input.action, accepted, commandId: result.commandId, status: result.status };
   }
 
   private async loadCharger(id: string, user: AuthenticatedUser) {

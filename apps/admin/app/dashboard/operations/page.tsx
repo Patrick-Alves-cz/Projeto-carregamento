@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { QueryError } from "@/components/query-state";
 import { useQuery } from "@/hooks/use-query";
 import { useRealtime } from "@/hooks/use-realtime";
-import { listActiveSessions, pauseSession, resumeSession, stopSession, type ChargingSession } from "@/lib/api-client";
+import { listActiveSessions, pauseSession, resumeSession, stopSession, getOperationsSummary, type ChargingSession } from "@/lib/api-client";
 import {
   formatCurrency,
   formatDuration,
@@ -95,6 +95,7 @@ function LiveSessionRow({
 export default function OperationsPage() {
   const [tick, setTick] = useState(0);
   const sessionsQuery = useQuery(listActiveSessions, [tick]);
+  const opsQuery = useQuery(getOperationsSummary, [tick]);
   const refresh = useCallback(() => setTick((v) => v + 1), []);
 
   useRealtime(() => {
@@ -106,10 +107,30 @@ export default function OperationsPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Operação ao vivo</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Central de operações</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pause, retome ou encerre pela API. Sem manipulação direta do banco.
+          Saúde da rede, incidentes e sessões ao vivo. Sem manipulação direta do banco.
         </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          ["Online", opsQuery.data?.onlineChargers ?? "—"],
+          ["Offline", opsQuery.data?.offline ?? "—"],
+          ["Faulted / degradado", `${opsQuery.data?.faulted ?? 0} / ${opsQuery.data?.degraded ?? 0}`],
+          ["Sessões ativas", opsQuery.data?.activeSessions ?? sessions.length],
+          ["Incidentes abertos", opsQuery.data?.openIncidents ?? "—"],
+          ["Reservas / fila", `${opsQuery.data?.activeReservations ?? 0} / ${opsQuery.data?.waitlist ?? 0}`],
+          ["Uptime / confiabilidade", `${opsQuery.data?.uptimePercent ?? 0}% / ${opsQuery.data?.reliabilityAverage ?? 0}`],
+          ["Comandos falhos 24h", opsQuery.data?.failedCommands24h ?? "—"],
+        ].map(([label, value]) => (
+          <Card key={label} className="gap-1 py-4">
+            <CardHeader className="px-5">
+              <CardDescription>{label}</CardDescription>
+              <CardTitle className="text-xl">{value}</CardTitle>
+            </CardHeader>
+          </Card>
+        ))}
       </div>
 
       <Card>

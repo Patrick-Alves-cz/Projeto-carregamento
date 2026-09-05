@@ -11,8 +11,14 @@ import {
   NotFoundError,
   ValidationError,
   connectorMatchesCurrentType,
+  deriveStationAvailability,
+  communicationFreshness,
+  healthDriverHint,
+  healthDriverLabel,
   isVehicleCompatibleWithConnector,
   pickEffectiveTariff,
+  reliabilityDriverLabel,
+  stationAvailabilityDriverLabel,
   stationCurrentType,
   type TariffLike,
 } from "@evcharge/domain";
@@ -113,7 +119,21 @@ export class StationsService {
       );
     }
 
-    return stations.map((s) => this.enrichStation(s));
+    const blocked = await this.blockedKeys();
+    return stations.map((s) => this.enrichStation(s, null, blocked));
+  }
+
+  private async blockedKeys() {
+    const now = new Date();
+    const windows = await this.prisma.maintenanceWindow.findMany({
+      where: { status: "ACTIVE", startsAt: { lte: now }, endsAt: { gte: now } },
+      select: { stationId: true, chargerId: true, connectorId: true },
+    });
+    return {
+      stations: new Set(windows.map((item) => item.stationId).filter(Boolean) as string[]),
+      chargers: new Set(windows.map((item) => item.chargerId).filter(Boolean) as string[]),
+      connectors: new Set(windows.map((item) => item.connectorId).filter(Boolean) as string[]),
+    };
   }
 
   async findNearby(query: NearbyStationsQuery, user: AuthenticatedUser) {
@@ -139,6 +159,7 @@ export class StationsService {
       include: stationInclude,
     });
 
+    const blocked = await this.blockedKeys();
     const results = stations
       .map((station) => {
         const distanceKm = haversineDistanceKm(
@@ -159,7 +180,7 @@ export class StationsService {
         vehicleTypes,
       }))
       .sort((a, b) => a.distanceKm - b.distanceKm)
-      .map(({ station, distanceKm }) => this.toDiscoveryCard(station, distanceKm, vehicleTypes));
+      .map(({ station, distanceKm }) => this.toDiscoveryCard(station, distanceKm, vehicleTypes, blocked));
 
     return results;
   }
@@ -176,7 +197,8 @@ export class StationsService {
     }
 
     const vehicleTypes = await this.resolveVehicleTypes(vehicleId, user);
-    return this.enrichStation(station, vehicleTypes);
+    const blocked = await this.blockedKeys();
+    return this.enrichStation(station, vehicleTypes, blocked);
   }
 
   async create(input: CreateStationInput, user: AuthenticatedUser) {
@@ -325,8 +347,9 @@ export class StationsService {
     station: StationRecord,
     distanceKm: number,
     vehicleTypes: string[] | null,
+    blocked?: { stations: Set<string>; chargers: Set<string>; connectors: Set<string> },
   ) {
-    const summary = this.summarize(station, vehicleTypes);
+    const summary = this.summarize(station, vehicleTypes, blocked);
     return {
       id: station.id,
       name: station.name,
@@ -355,16 +378,27 @@ export class StationsService {
       compatible: summary.compatible,
       lastSeenAt: summary.lastSeenAt,
       updatedAt: station.updatedAt,
+      availabilityState: summary.availabilityState,
+      freshness: summary.freshness,
+      inMaintenance: summary.inMaintenance,
       reliability: {
         lastCommunicationAt: summary.lastSeenAt,
         lastUpdatedAt: station.updatedAt,
-        availabilityPercent: null,
+        availabilityPercent: summary.reliabilityScore,
+        score: summary.reliabilityScore,
+        label: reliabilityDriverLabel(summary.reliabilityScore),
+        health: summary.healthLabel,
+        hint: summary.healthHint,
       },
     };
   }
 
-  private enrichStation(station: StationRecord, vehicleTypes: string[] | null = null) {
-    const summary = this.summarize(station, vehicleTypes);
+  private enrichStation(
+    station: StationRecord,
+    vehicleTypes: string[] | null = null,
+    blocked?: { stations: Set<string>; chargers: Set<string>; connectors: Set<string> },
+  ) {
+    const summary = this.summarize(station, vehicleTypes, blocked);
     return {
       id: station.id,
       companyId: station.companyId,
@@ -391,10 +425,18 @@ export class StationsService {
       tariffId: station.tariffId,
       compatible: summary.compatible,
       crowded: summary.totalConnectors > 0 && summary.availableConnectors === 0,
+      availabilityState: summary.availabilityState,
+      availabilityLabel: stationAvailabilityDriverLabel(summary.availabilityState),
+      freshness: summary.freshness,
+      inMaintenance: summary.inMaintenance,
       reliability: {
         lastCommunicationAt: summary.lastSeenAt,
         lastUpdatedAt: station.updatedAt,
-        availabilityPercent: null,
+        availabilityPercent: summary.reliabilityScore,
+        score: summary.reliabilityScore,
+        label: reliabilityDriverLabel(summary.reliabilityScore),
+        health: summary.healthLabel,
+        hint: summary.healthHint,
       },
       availability: {
         totalConnectors: summary.totalConnectors,
@@ -403,6 +445,11 @@ export class StationsService {
         reservedConnectors: summary.reservedConnectors,
         offlineConnectors: summary.offlineConnectors,
         faultedConnectors: summary.faultedConnectors,
+        workingConnectors: Math.max(
+          0,
+          summary.totalConnectors - summary.faultedConnectors - summary.offlineConnectors,
+        ),
+        state: summary.availabilityState,
       },
       chargers: station.chargers.map((charger) => ({
         id: charger.id,
@@ -411,12 +458,18 @@ export class StationsService {
         model: charger.model,
         maxPowerKw: Number(charger.maxPowerKw),
         status: charger.status,
-        lastSeenAt: charger.lastSeenAt,
+        healthStatus: charger.healthStatus,
+        reliabilityScore: charger.reliabilityScore,
+        lastSeenAt: charger.lastMessageAt ?? charger.lastSeenAt,
         connectors: charger.connectors.map((connector) => {
           const compatible =
             vehicleTypes === null
               ? null
               : isVehicleCompatibleWithConnector(vehicleTypes, connector.type);
+          const maintenance =
+            Boolean(blocked?.stations.has(station.id)) ||
+            Boolean(blocked?.chargers.has(charger.id)) ||
+            Boolean(blocked?.connectors.has(connector.id));
           return {
             id: connector.id,
             chargerId: connector.chargerId,
@@ -432,6 +485,7 @@ export class StationsService {
               charger.status,
               connector.status,
               compatible,
+              maintenance,
             ),
           };
         }),
@@ -439,7 +493,11 @@ export class StationsService {
     };
   }
 
-  private summarize(station: StationRecord, vehicleTypes: string[] | null) {
+  private summarize(
+    station: StationRecord,
+    vehicleTypes: string[] | null,
+    blocked?: { stations: Set<string>; chargers: Set<string>; connectors: Set<string> },
+  ) {
     const connectors = station.chargers.flatMap((charger) => charger.connectors);
     const totalConnectors = connectors.length;
     const availableConnectors = connectors.filter(
@@ -460,8 +518,9 @@ export class StationsService {
     }, 0);
     const types = connectors.map((connector) => connector.type);
     const lastSeenAt = station.chargers.reduce<Date | null>((latest, charger) => {
-      if (!charger.lastSeenAt) return latest;
-      if (!latest || charger.lastSeenAt > latest) return charger.lastSeenAt;
+      const stamp = charger.lastMessageAt ?? charger.lastSeenAt;
+      if (!stamp) return latest;
+      if (!latest || stamp > latest) return stamp;
       return latest;
     }, null);
     const tariff = this.tariffForStation(station);
@@ -471,6 +530,42 @@ export class StationsService {
         : connectors.some((connector) =>
             isVehicleCompatibleWithConnector(vehicleTypes, connector.type),
           );
+    const inMaintenance =
+      station.status === StationStatus.MAINTENANCE || Boolean(blocked?.stations.has(station.id));
+    const availabilityState = deriveStationAvailability(
+      {
+        total: totalConnectors,
+        available: availableConnectors,
+        occupied: occupiedConnectors - reservedConnectors,
+        reserved: reservedConnectors,
+        faulted: faultedConnectors,
+        offline: offlineConnectors,
+      },
+      { stationStatus: station.status, inMaintenance },
+    );
+    const reliabilityScore =
+      station.chargers.length === 0
+        ? 100
+        : Math.round(
+            station.chargers.reduce((sum, charger) => sum + charger.reliabilityScore, 0) /
+              station.chargers.length,
+          );
+    const freshness = communicationFreshness({
+      connected: station.chargers.some((charger) => charger.status !== "OFFLINE"),
+      lastMessageAt: lastSeenAt,
+      lastSeenAt,
+    });
+    const healthStatus = inMaintenance
+      ? "MAINTENANCE"
+      : station.chargers.some((item) => item.healthStatus === "FAULTED")
+        ? "FAULTED"
+        : station.chargers.every((item) => item.healthStatus === "OFFLINE")
+          ? "OFFLINE"
+          : station.chargers.some((item) => item.healthStatus === "UNSTABLE")
+            ? "UNSTABLE"
+            : station.chargers.some((item) => item.healthStatus === "DEGRADED")
+              ? "DEGRADED"
+              : "HEALTHY";
 
     return {
       totalConnectors,
@@ -488,6 +583,12 @@ export class StationsService {
       currency: tariff?.currency ?? "BRL",
       lastSeenAt,
       compatible,
+      availabilityState,
+      reliabilityScore,
+      freshness,
+      inMaintenance,
+      healthLabel: healthDriverLabel(healthStatus),
+      healthHint: healthDriverHint(healthStatus),
     };
   }
 
@@ -496,7 +597,9 @@ export class StationsService {
     chargerStatus: string,
     connectorStatus: ConnectorStatus,
     compatible: boolean | null,
-  ): "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE" {
+    inMaintenance = false,
+  ): "CHARGE" | "INCOMPATIBLE" | "OCCUPIED" | "UNAVAILABLE" | "MAINTENANCE" {
+    if (inMaintenance || stationStatus === StationStatus.MAINTENANCE) return "MAINTENANCE";
     if (stationStatus !== StationStatus.ACTIVE) return "UNAVAILABLE";
     if (OFFLINE_CHARGER_STATUSES.has(chargerStatus)) return "UNAVAILABLE";
     if (connectorStatus === ConnectorStatus.FAULTED || connectorStatus === ConnectorStatus.UNAVAILABLE) {

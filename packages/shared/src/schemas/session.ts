@@ -5,6 +5,8 @@ export const SESSION_STATUSES = [
   "PREPARING",
   "ACTIVE",
   "PAUSED",
+  "CHARGING_COMPLETE",
+  "IDLE",
   "COMPLETED",
   "FAILED",
   "CANCELLED",

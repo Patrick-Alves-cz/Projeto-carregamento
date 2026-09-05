@@ -1,12 +1,14 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@evcharge/domain";
-import { ConnectorStatus, NotificationType, UserRole, WaitlistStatus } from "@prisma/client";
+import type { JoinWaitlistInput } from "@evcharge/shared";
+import { ConnectorStatus, ConnectorType, NotificationType, UserRole, WaitlistScope, WaitlistStatus } from "@prisma/client";
 import { PrismaService } from "../common/database/database.module";
 import { TenantAccessService } from "../common/services/tenant-access.service";
 import { AuthenticatedUser } from "../common/types/auth.types";
 import { AuditLogger } from "../common/logging/audit-logger";
 import { NotificationsService } from "../notifications/notifications.service";
 import { ChargingEventsService } from "../charging/charging-events.service";
+import { WaitTimeEstimator } from "../operations/wait-time.estimator";
 
 const OPEN: WaitlistStatus[] = [WaitlistStatus.WAITING, WaitlistStatus.NOTIFIED];
 
@@ -20,45 +22,99 @@ export class WaitlistService {
     private readonly tenant: TenantAccessService,
     private readonly notifications: NotificationsService,
     private readonly events: ChargingEventsService,
+    private readonly eta: WaitTimeEstimator,
   ) {}
 
-  async join(user: AuthenticatedUser, connectorId: string) {
+  async join(user: AuthenticatedUser, input: JoinWaitlistInput | string) {
     if (user.role !== UserRole.DRIVER) throw new ForbiddenError("Somente motoristas entram na fila");
-    const connector = await this.prisma.connector.findUnique({
-      where: { id: connectorId },
-      include: { charger: { include: { station: true } } },
+    const body: JoinWaitlistInput = typeof input === "string" ? { connectorId: input } : input;
+    const connector = body.connectorId
+      ? await this.prisma.connector.findUnique({
+          where: { id: body.connectorId },
+          include: { charger: { include: { station: true } } },
+        })
+      : null;
+    if (body.connectorId && !connector) throw new NotFoundError("Connector", body.connectorId);
+
+    const stationId = body.stationId ?? connector?.charger.stationId;
+    if (!stationId) throw new ValidationError("Estação obrigatória para entrar na fila");
+    const station = await this.prisma.station.findUnique({ where: { id: stationId } });
+    if (!station) throw new NotFoundError("Station", stationId);
+
+    const now = new Date();
+    const maintenance = await this.prisma.maintenanceWindow.findFirst({
+      where: {
+        status: "ACTIVE",
+        startsAt: { lte: now },
+        endsAt: { gte: now },
+        OR: [
+          { stationId },
+          connector?.chargerId ? { chargerId: connector.chargerId } : undefined,
+          connector?.id ? { connectorId: connector.id } : undefined,
+        ].filter(Boolean) as Array<{ stationId: string } | { chargerId: string } | { connectorId: string }>,
+      },
     });
-    if (!connector) throw new NotFoundError("Connector", connectorId);
-    if (connector.status === ConnectorStatus.AVAILABLE) {
+    if (maintenance) {
+      throw new ValidationError("Temporariamente indisponível para manutenção.", "MAINTENANCE");
+    }
+
+    const scope =
+      body.scope ??
+      (body.connectorId ? WaitlistScope.CONNECTOR : body.connectorType ? WaitlistScope.CONNECTOR_TYPE : WaitlistScope.STATION);
+    const connectorType = (body.connectorType ?? connector?.type) as ConnectorType | undefined;
+    if (connector && connector.status === ConnectorStatus.AVAILABLE && scope === WaitlistScope.CONNECTOR) {
       throw new ValidationError("Este conector já está disponível");
     }
 
     const existing = await this.prisma.chargingWaitlist.findFirst({
-      where: { userId: user.id, connectorId, status: { in: OPEN } },
+      where: {
+        userId: user.id,
+        stationId,
+        status: { in: OPEN },
+        ...(scope === WaitlistScope.CONNECTOR ? { connectorId: body.connectorId } : {}),
+        ...(scope === WaitlistScope.CONNECTOR_TYPE ? { connectorType, scope } : {}),
+        ...(scope === WaitlistScope.STATION ? { scope } : {}),
+      },
     });
-    if (existing) return existing;
+    if (existing) return this.withEta(existing);
 
     const last = await this.prisma.chargingWaitlist.findFirst({
-      where: { connectorId, status: { in: OPEN } },
+      where: {
+        stationId,
+        status: { in: OPEN },
+        ...(scope === WaitlistScope.CONNECTOR ? { connectorId: body.connectorId } : {}),
+        ...(scope === WaitlistScope.CONNECTOR_TYPE ? { connectorType } : {}),
+      },
       orderBy: { position: "desc" },
+    });
+    const eta = await this.eta.forEntry({
+      stationId,
+      connectorId: connector?.id,
+      connectorType,
+      userId: user.id,
     });
     const entry = await this.prisma.chargingWaitlist.create({
       data: {
         userId: user.id,
-        companyId: connector.charger.station.companyId,
-        stationId: connector.charger.stationId,
-        connectorId,
+        companyId: station.companyId,
+        stationId,
+        connectorId: connector?.id,
+        connectorType: connectorType ?? null,
+        scope,
         position: (last?.position ?? 0) + 1,
         status: WaitlistStatus.WAITING,
+        etaMinutes: eta.minutes,
       },
     });
-    this.audit.info("waitlist.joined", { waitlistId: entry.id, userId: user.id, connectorId });
+    this.audit.info("waitlist.joined", { waitlistId: entry.id, userId: user.id, stationId, scope });
     await this.notifications.notify({
       userId: user.id,
       type: NotificationType.WAITLIST_JOINED,
       title: "Você entrou na fila",
-      body: `Sua posição é ${entry.position}.`,
-      payload: { waitlistId: entry.id, connectorId },
+      body: eta.available
+        ? `Sua posição é ${entry.position}. Espera estimada: ${eta.label}.`
+        : `Sua posição é ${entry.position}.`,
+      payload: { waitlistId: entry.id, stationId, connectorId: connector?.id ?? null },
       dedupeKey: `waitlist-joined-${entry.id}`,
     });
     await this.events.publish({
@@ -66,18 +122,19 @@ export class WaitlistService {
       entityType: "waitlist",
       entityId: entry.id,
       timestamp: new Date(),
-      payload: { waitlistId: entry.id, userId: user.id, connectorId, companyId: entry.companyId },
+      payload: { waitlistId: entry.id, userId: user.id, connectorId: connector?.id ?? null, companyId: entry.companyId },
     });
-    return entry;
+    return this.withEta(entry);
   }
 
   async mine(user: AuthenticatedUser) {
     if (user.role !== UserRole.DRIVER) throw new ForbiddenError("Somente motoristas");
-    return this.prisma.chargingWaitlist.findMany({
+    const items = await this.prisma.chargingWaitlist.findMany({
       where: { userId: user.id },
       include: { station: true, connector: true },
       orderBy: { createdAt: "desc" },
     });
+    return Promise.all(items.map((item) => this.withEta(item)));
   }
 
   async listAdmin(user: AuthenticatedUser) {
@@ -85,7 +142,7 @@ export class WaitlistService {
     return this.prisma.chargingWaitlist.findMany({
       where: this.tenant.isSuperAdmin(user) ? {} : { companyId: { in: user.companyIds } },
       include: { station: true, connector: true, user: { include: { profile: true } } },
-      orderBy: [{ connectorId: "asc" }, { position: "asc" }],
+      orderBy: [{ stationId: "asc" }, { position: "asc" }],
       take: 200,
     });
   }
@@ -118,22 +175,42 @@ export class WaitlistService {
   }
 
   async notifyNext(connectorId: string) {
+    const connector = await this.prisma.connector.findUnique({
+      where: { id: connectorId },
+      include: { charger: true },
+    });
+    if (!connector) return null;
+    if (await this.eta.connectorHasReservationConflict(connectorId)) return null;
+
     const next = await this.prisma.chargingWaitlist.findFirst({
-      where: { connectorId, status: WaitlistStatus.WAITING },
+      where: {
+        status: WaitlistStatus.WAITING,
+        stationId: connector.charger.stationId,
+        OR: [
+          { connectorId, scope: WaitlistScope.CONNECTOR },
+          { connectorType: connector.type, scope: WaitlistScope.CONNECTOR_TYPE },
+          { scope: WaitlistScope.STATION, OR: [{ connectorType: null }, { connectorType: connector.type }] },
+        ],
+      },
       orderBy: { position: "asc" },
     });
     if (!next) return null;
     const expiresAt = new Date(Date.now() + this.claimMinutes * 60_000);
     const updated = await this.prisma.chargingWaitlist.update({
       where: { id: next.id },
-      data: { status: WaitlistStatus.NOTIFIED, notifiedAt: new Date(), expiresAt },
+      data: {
+        status: WaitlistStatus.NOTIFIED,
+        notifiedAt: new Date(),
+        expiresAt,
+        connectorId: next.connectorId ?? connector.id,
+      },
     });
     await this.notifications.notify({
       userId: next.userId,
       type: NotificationType.WAITLIST_NOTIFIED,
       title: "Sua vez na fila",
-      body: "O conector ficou disponível. Confirme em alguns minutos.",
-      payload: { waitlistId: next.id, connectorId },
+      body: "Há um conector compatível disponível. Confirme em alguns minutos.",
+      payload: { waitlistId: next.id, connectorId: connector.id },
       dedupeKey: `waitlist-notified-${next.id}`,
     });
     await this.notifications.notify({
@@ -141,7 +218,7 @@ export class WaitlistService {
       type: NotificationType.CONNECTOR_AVAILABLE,
       title: "Conector disponível",
       body: "Você pode iniciar ou reservar agora.",
-      payload: { connectorId },
+      payload: { connectorId: connector.id },
       dedupeKey: `connector-available-${next.id}`,
     });
     await this.events.publish({
@@ -149,7 +226,7 @@ export class WaitlistService {
       entityType: "waitlist",
       entityId: next.id,
       timestamp: new Date(),
-      payload: { waitlistId: next.id, userId: next.userId, connectorId, companyId: next.companyId },
+      payload: { waitlistId: next.id, userId: next.userId, connectorId: connector.id, companyId: next.companyId },
     });
     return updated;
   }
@@ -164,7 +241,19 @@ export class WaitlistService {
         where: { id: entry.id },
         data: { status: WaitlistStatus.EXPIRED },
       });
-      await this.notifyNext(entry.connectorId);
+      if (entry.connectorId) await this.notifyNext(entry.connectorId);
     }
+  }
+
+  private async withEta<T extends { stationId: string; connectorId: string | null; connectorType: ConnectorType | null; userId: string; etaMinutes: number | null }>(
+    entry: T,
+  ) {
+    const eta = await this.eta.forEntry({
+      stationId: entry.stationId,
+      connectorId: entry.connectorId,
+      connectorType: entry.connectorType,
+      userId: entry.userId,
+    });
+    return { ...entry, etaMinutes: eta.minutes, etaLabel: eta.label };
   }
 }

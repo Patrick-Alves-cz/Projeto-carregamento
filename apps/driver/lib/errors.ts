@@ -5,6 +5,18 @@ export function driverErrorMessage(error: unknown): string {
     if (error.code === "VALIDATION_ERROR" && /incompat/i.test(error.message)) {
       return "Este conector não é compatível com o veículo selecionado.";
     }
+    if (error.code === "CHARGER_OFFLINE" || error.code === "COMMUNICATION_LOSS") {
+      return "Este carregador está temporariamente indisponível.";
+    }
+    if (error.code === "REMOTE_START_REJECTED") {
+      return "Não foi possível iniciar o carregamento. Tente novamente ou escolha outro conector.";
+    }
+    if (error.code === "CONNECTOR_FAULT" || error.code === "CHARGER_FAULTED") {
+      return "Este conector apresentou uma falha. Escolha outro disponível.";
+    }
+    if (error.code === "MAINTENANCE") {
+      return "Temporariamente indisponível para manutenção.";
+    }
     if (error.code === "CONNECTOR_UNAVAILABLE") {
       if (/offline/i.test(error.message)) return "Este carregador está offline no momento.";
       return "Este conector está ocupado ou indisponível.";

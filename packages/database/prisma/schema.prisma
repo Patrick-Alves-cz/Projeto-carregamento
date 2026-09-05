@@ -85,6 +85,8 @@ enum SessionStatus {
   PREPARING
   ACTIVE
   PAUSED
+  CHARGING_COMPLETE
+  IDLE
   COMPLETED
   FAILED
   CANCELLED
@@ -149,6 +151,17 @@ enum NotificationType {
   WAITLIST_NOTIFIED
   PAYMENT_CONFIRMED
   PAYMENT_FAILED
+  CHARGER_OFFLINE
+  CHARGER_RECOVERED
+  CONNECTOR_FAULT
+  CRITICAL_INCIDENT
+  SESSION_STUCK
+  COMMAND_TIMEOUT
+  MAINTENANCE_STARTING
+  MAINTENANCE_ENDING
+  FAVORITE_STATION_ONLINE
+  IDLE_FEE_WARNING
+  CHARGER_UNAVAILABLE_DURING_RESERVATION
 }
 
 enum ReservationStatus {
@@ -172,6 +185,95 @@ enum WaitlistStatus {
 enum PaymentMethodStatus {
   ACTIVE
   REVOKED
+}
+
+enum ChargerHealthStatus {
+  HEALTHY
+  DEGRADED
+  UNSTABLE
+  OFFLINE
+  FAULTED
+  MAINTENANCE
+}
+
+enum CommunicationFreshness {
+  LIVE
+  RECENT
+  STALE
+  OFFLINE
+}
+
+enum StationAvailabilityState {
+  AVAILABLE
+  LIMITED
+  BUSY
+  RESERVED
+  OFFLINE
+  FAULTED
+  MAINTENANCE
+}
+
+enum IncidentType {
+  CHARGER_OFFLINE
+  CONNECTOR_FAULT
+  SESSION_FAILURE
+  REMOTE_START_FAILURE
+  REMOTE_STOP_FAILURE
+  COMMUNICATION_LOSS
+  PAYMENT_FAILURE
+  RESERVATION_FAILURE
+  METERING_ANOMALY
+  UNKNOWN
+}
+
+enum IncidentSeverity {
+  INFO
+  WARNING
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  IGNORED
+}
+
+enum MaintenanceWindowStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum ChargerCommandType {
+  REMOTE_START
+  REMOTE_STOP
+  RESET
+  CHANGE_AVAILABILITY
+}
+
+enum ChargerCommandStatus {
+  QUEUED
+  SENT
+  ACCEPTED
+  REJECTED
+  TIMEOUT
+  FAILED
+  COMPLETED
+}
+
+enum ReconciliationCaseStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+}
+
+enum WaitlistScope {
+  CONNECTOR
+  CONNECTOR_TYPE
+  STATION
 }
 
 // ─── Users & Profiles ──────────────────────────────────────────────────────────
@@ -200,7 +302,10 @@ model User {
   paymentMethods      PaymentMethod[]
   reservations        Reservation[]
   waitlistEntries     ChargingWaitlist[]
-  favoriteStations    FavoriteStation[]
+  favoriteStations     FavoriteStation[]
+  incidentsResolved    Incident[]          @relation("IncidentResolver")
+  maintenanceCreated   MaintenanceWindow[] @relation("MaintenanceCreator")
+  chargerCommands      ChargerCommand[]
 
   @@map("users")
 }
@@ -253,9 +358,14 @@ model Company {
   stations     Station[]
   tariffs      Tariff[]
   invitations  Invitation[]
-  reservations Reservation[]
-  waitlist     ChargingWaitlist[]
-  payments     Payment[]
+  reservations           Reservation[]
+  waitlist               ChargingWaitlist[]
+  payments               Payment[]
+  incidents              Incident[]
+  maintenanceWindows     MaintenanceWindow[]
+  chargerCommands        ChargerCommand[]
+  reliabilitySnapshots   ChargerReliabilitySnapshot[]
+  reconciliationCases    ReconciliationCase[]
 
   @@map("companies")
 }
@@ -318,9 +428,11 @@ model Station {
   company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   tariff      Tariff?            @relation(fields: [tariffId], references: [id], onDelete: SetNull)
   chargers    Charger[]
-  reservations Reservation[]
-  waitlist     ChargingWaitlist[]
-  favorites    FavoriteStation[]
+  reservations         Reservation[]
+  waitlist             ChargingWaitlist[]
+  favorites            FavoriteStation[]
+  incidents            Incident[]
+  maintenanceWindows   MaintenanceWindow[]
 
   @@index([companyId, status])
   @@map("stations")
@@ -340,17 +452,30 @@ model Charger {
   status                  ChargerStatus @default(OFFLINE)
   providerId              String?       @map("provider_id")
   lastSeenAt              DateTime?     @map("last_seen_at")
+  lastHeartbeatAt         DateTime?     @map("last_heartbeat_at")
+  lastBootAt              DateTime?     @map("last_boot_at")
+  lastMessageAt           DateTime?     @map("last_message_at")
+  healthStatus            ChargerHealthStatus @default(OFFLINE) @map("health_status")
+  healthUpdatedAt         DateTime?     @map("health_updated_at")
+  reliabilityScore        Int           @default(100) @map("reliability_score")
+  reconnectCount24h       Int           @default(0) @map("reconnect_count_24h")
   createdAt               DateTime      @default(now()) @map("created_at")
   updatedAt               DateTime      @updatedAt @map("updated_at")
 
-  station      Station             @relation(fields: [stationId], references: [id], onDelete: Cascade)
-  connectors   Connector[]
-  credentials  ChargerCredential[]
-  ocppTxs      OcppTransaction[]
-  chargerEvents ChargerEvent[]
+  station                Station                       @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connectors             Connector[]
+  credentials            ChargerCredential[]
+  ocppTxs                OcppTransaction[]
+  chargerEvents          ChargerEvent[]
+  incidents              Incident[]
+  maintenanceWindows     MaintenanceWindow[]
+  commands               ChargerCommand[]
+  reliabilitySnapshots   ChargerReliabilitySnapshot[]
+  reconciliationCases    ReconciliationCase[]
 
   @@index([stationId, status])
   @@index([providerId])
+  @@index([healthStatus])
   @@map("chargers")
 }
 
@@ -367,11 +492,14 @@ model Connector {
 
   charger          Charger            @relation(fields: [chargerId], references: [id], onDelete: Cascade)
   tariff           Tariff?            @relation(fields: [tariffId], references: [id], onDelete: SetNull)
-  chargingSessions ChargingSession[]
-  ocppTxs          OcppTransaction[]
-  reservations     Reservation[]
-  waitlist         ChargingWaitlist[]
-  favorites        FavoriteStation[]
+  chargingSessions   ChargingSession[]
+  ocppTxs            OcppTransaction[]
+  reservations       Reservation[]
+  waitlist           ChargingWaitlist[]
+  favorites          FavoriteStation[]
+  incidents          Incident[]
+  maintenanceWindows MaintenanceWindow[]
+  commands           ChargerCommand[]
 
   @@unique([chargerId, number])
   @@index([chargerId, status])
@@ -428,13 +556,17 @@ model ChargingSession {
   socPercent         Decimal?           @map("soc_percent") @db.Decimal(5, 2)
   costCents          Int                @default(0) @map("cost_cents")
   idTag              String?            @map("id_tag")
-  remoteStopPending  Boolean            @default(false) @map("remote_stop_pending")
-  reservationId      String?            @map("reservation_id")
-  paymentKind        String             @default("WALLET") @map("payment_kind")
-  idempotencyKey     String?            @map("idempotency_key")
-  stopIdempotencyKey String?            @map("stop_idempotency_key")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  remoteStopPending    Boolean            @default(false) @map("remote_stop_pending")
+  reservationId        String?            @map("reservation_id")
+  paymentKind          String             @default("WALLET") @map("payment_kind")
+  chargingCompletedAt  DateTime?          @map("charging_completed_at")
+  idleStartedAt        DateTime?          @map("idle_started_at")
+  lastMeterAt          DateTime?          @map("last_meter_at")
+  watchdogClass        String?            @map("watchdog_class")
+  idempotencyKey       String?            @map("idempotency_key")
+  stopIdempotencyKey   String?            @map("stop_idempotency_key")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
 
   user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -445,8 +577,10 @@ model ChargingSession {
   receipt            Receipt?
   walletTransactions WalletTransaction[]
   ocppTxs            OcppTransaction[]
-  ocppAuths          OcppAuthorization[]
-  reservation        Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  ocppAuths           OcppAuthorization[]
+  reservation         Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  incidents           Incident[]
+  reconciliationCases ReconciliationCase[]
 
   @@unique([userId, idempotencyKey])
   @@unique([userId, stopIdempotencyKey])
@@ -616,25 +750,29 @@ model Reservation {
 }
 
 model ChargingWaitlist {
-  id          String         @id @default(cuid())
-  userId      String         @map("user_id")
-  companyId   String         @map("company_id")
-  stationId   String         @map("station_id")
-  connectorId String         @map("connector_id")
-  position    Int
-  status      WaitlistStatus @default(WAITING)
-  notifiedAt  DateTime?      @map("notified_at")
-  expiresAt   DateTime?      @map("expires_at")
-  claimedAt   DateTime?      @map("claimed_at")
-  createdAt   DateTime       @default(now()) @map("created_at")
-  updatedAt   DateTime       @updatedAt @map("updated_at")
+  id            String         @id @default(cuid())
+  userId        String         @map("user_id")
+  companyId     String         @map("company_id")
+  stationId     String         @map("station_id")
+  connectorId   String?        @map("connector_id")
+  connectorType ConnectorType? @map("connector_type")
+  scope         WaitlistScope  @default(CONNECTOR)
+  position      Int
+  etaMinutes    Int?           @map("eta_minutes")
+  status        WaitlistStatus @default(WAITING)
+  notifiedAt    DateTime?      @map("notified_at")
+  expiresAt     DateTime?      @map("expires_at")
+  claimedAt     DateTime?      @map("claimed_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
 
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  station   Station   @relation(fields: [stationId], references: [id], onDelete: Cascade)
-  connector Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station   Station    @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  connector Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
 
   @@index([connectorId, status, position])
+  @@index([stationId, status, position])
   @@index([userId, status])
   @@index([companyId, status])
   @@map("charging_waitlist")
@@ -830,6 +968,7 @@ model ChargerEvent {
   id        String   @id @default(cuid())
   chargerId String   @map("charger_id")
   type      String
+  category  String   @default("OPERATIONAL")
   payload   Json     @default("{}")
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -837,5 +976,150 @@ model ChargerEvent {
 
   @@index([chargerId, createdAt])
   @@index([type, createdAt])
+  @@index([category, createdAt])
   @@map("charger_events")
+}
+
+model Incident {
+  id           String           @id @default(cuid())
+  companyId    String           @map("company_id")
+  stationId    String           @map("station_id")
+  chargerId    String?          @map("charger_id")
+  connectorId  String?          @map("connector_id")
+  sessionId    String?          @map("session_id")
+  type         IncidentType
+  severity     IncidentSeverity
+  status       IncidentStatus   @default(OPEN)
+  title        String
+  description  String
+  source       String           @default("system")
+  openKey      String?          @unique @map("open_key")
+  firstSeenAt  DateTime         @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime         @default(now()) @map("last_seen_at")
+  resolvedAt   DateTime?        @map("resolved_at")
+  resolution   String?
+  resolvedById String?          @map("resolved_by_id")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station   Station          @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  charger   Charger?         @relation(fields: [chargerId], references: [id], onDelete: SetNull)
+  connector Connector?       @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  session   ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  resolvedBy User?           @relation("IncidentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, severity])
+  @@index([chargerId, status])
+  @@index([stationId, status])
+  @@index([type, status])
+  @@map("incidents")
+}
+
+model MaintenanceWindow {
+  id          String                  @id @default(cuid())
+  companyId   String                  @map("company_id")
+  stationId   String?                 @map("station_id")
+  chargerId   String?                 @map("charger_id")
+  connectorId String?                 @map("connector_id")
+  startsAt    DateTime                @map("starts_at")
+  endsAt      DateTime                @map("ends_at")
+  reason      String
+  status      MaintenanceWindowStatus @default(SCHEDULED)
+  createdById String                  @map("created_by")
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  station   Station?   @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  charger   Charger?   @relation(fields: [chargerId], references: [id], onDelete: SetNull)
+  connector Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  createdBy User       @relation("MaintenanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([companyId, status, startsAt])
+  @@index([chargerId, status])
+  @@index([stationId, status])
+  @@index([status, startsAt, endsAt])
+  @@map("maintenance_windows")
+}
+
+model ChargerCommand {
+  id                   String              @id @default(cuid())
+  companyId            String              @map("company_id")
+  chargerId            String              @map("charger_id")
+  connectorId          String?             @map("connector_id")
+  type                 ChargerCommandType
+  status               ChargerCommandStatus @default(QUEUED)
+  requestedById        String?             @map("requested_by")
+  requestedAt          DateTime            @default(now()) @map("requested_at")
+  sentAt               DateTime?           @map("sent_at")
+  respondedAt          DateTime?           @map("responded_at")
+  completedAt          DateTime?           @map("completed_at")
+  errorCode            String?             @map("error_code")
+  errorMessageSanitized String?            @map("error_message_sanitized")
+  correlationId        String              @unique @map("correlation_id")
+  payload              Json                @default("{}")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  charger   Charger    @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  connector Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  requestedBy User?    @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([chargerId, createdAt])
+  @@index([companyId, status, createdAt])
+  @@index([status, sentAt])
+  @@map("charger_commands")
+}
+
+model ChargerReliabilitySnapshot {
+  id                       String   @id @default(cuid())
+  companyId                String   @map("company_id")
+  chargerId                String   @map("charger_id")
+  day                      DateTime @db.Date
+  score                    Int
+  uptimeRate               Float    @map("uptime_rate")
+  successfulSessionsRate   Float    @map("successful_sessions_rate")
+  commandSuccessRate       Float    @map("command_success_rate")
+  faultPenalty             Int      @map("fault_penalty")
+  sessionsStarted          Int      @default(0) @map("sessions_started")
+  sessionsCompleted        Int      @default(0) @map("sessions_completed")
+  sessionsFailed           Int      @default(0) @map("sessions_failed")
+  remoteStartFailures      Int      @default(0) @map("remote_start_failures")
+  remoteStopFailures       Int      @default(0) @map("remote_stop_failures")
+  offlineEvents            Int      @default(0) @map("offline_events")
+  recoveredEvents          Int      @default(0) @map("recovered_events")
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  charger Charger @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+
+  @@unique([chargerId, day])
+  @@index([companyId, day])
+  @@map("charger_reliability_snapshots")
+}
+
+model ReconciliationCase {
+  id           String                   @id @default(cuid())
+  companyId    String                   @map("company_id")
+  chargerId    String                   @map("charger_id")
+  sessionId    String?                  @map("session_id")
+  reason       String
+  status       ReconciliationCaseStatus @default(OPEN)
+  classification String                 @default("REQUIRES_RECONCILIATION")
+  detectedAt   DateTime                 @default(now()) @map("detected_at")
+  resolvedAt   DateTime?                @map("resolved_at")
+  resolution   String?
+  createdAt    DateTime                 @default(now()) @map("created_at")
+  updatedAt    DateTime                 @updatedAt @map("updated_at")
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  charger Charger          @relation(fields: [chargerId], references: [id], onDelete: Cascade)
+  session ChargingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([chargerId, status])
+  @@index([companyId, status, detectedAt])
+  @@index([sessionId, status])
+  @@map("reconciliation_cases")
 }

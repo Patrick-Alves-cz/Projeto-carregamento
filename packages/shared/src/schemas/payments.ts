@@ -39,7 +39,12 @@ export const createReservationSchema = z.object({
 });
 
 export const joinWaitlistSchema = z.object({
-  connectorId: z.string().cuid(),
+  stationId: z.string().cuid().optional(),
+  connectorId: z.string().cuid().optional(),
+  connectorType: z.enum(["TYPE2", "CCS2", "CHADEMO", "J1772", "NACS", "GB_T", "OTHER"]).optional(),
+  scope: z.enum(["CONNECTOR", "CONNECTOR_TYPE", "STATION"]).optional(),
+}).refine((value) => Boolean(value.connectorId || value.stationId), {
+  message: "connectorId or stationId is required",
 });
 
 export const estimateCostSchema = z.object({

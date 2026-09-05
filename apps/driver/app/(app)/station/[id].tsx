@@ -33,7 +33,6 @@ import {
   connectorStatusLabel,
   connectorTypeLabel,
   ctaLabel,
-  currentTypeLabel,
   formatCurrency,
   formatPower,
   formatRelativeTime,
@@ -153,6 +152,23 @@ export default function StationDetailScreen() {
     }
   }
 
+  async function handleWaitlistStation() {
+    if (!id) return;
+    setBusyAction("station");
+    try {
+      await joinWaitlist({
+        stationId: id,
+        connectorType: selectedVehicle?.connectorTypes[0],
+        scope: selectedVehicle?.connectorTypes[0] ? "CONNECTOR_TYPE" : "STATION",
+      });
+      setError("");
+    } catch (err: unknown) {
+      setError(driverErrorMessage(err));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function handleReserve(connectorId: string) {
     if (!selectedVehicle || !id) return;
     setBusyAction(connectorId);
@@ -178,7 +194,6 @@ export default function StationDetailScreen() {
 
   const free = station.availability.availableConnectors;
   const total = station.availability.totalConnectors;
-  const current = currentTypeLabel(station.currentType);
 
   return (
     <>
@@ -208,13 +223,15 @@ export default function StationDetailScreen() {
         <View style={styles.stats}>
           <View style={styles.stat}>
             <Text style={[styles.statValue, station.crowded && styles.full]}>
-              {availabilityCopy(free, total)}
+              {availabilityCopy(free, total, station.availabilityState)}
             </Text>
-            <Text style={styles.statLabel}>Disponibilidade</Text>
+            <Text style={styles.statLabel}>Disponibilidade agora</Text>
           </View>
           <View style={styles.stat}>
-            <Text style={styles.statValue}>{current ?? "—"}</Text>
-            <Text style={styles.statLabel}>Tipo</Text>
+            <Text style={styles.statValue}>{station.reliability.label ?? "—"}</Text>
+            <Text style={styles.statLabel}>
+              {station.reliability.score != null ? `${station.reliability.score}% de confiabilidade` : "Confiabilidade"}
+            </Text>
           </View>
           <View style={styles.stat}>
             <Text style={styles.statValue}>
@@ -225,8 +242,22 @@ export default function StationDetailScreen() {
         </View>
 
         <Text style={styles.updated}>
-          Última comunicação {formatRelativeTime(station.reliability.lastCommunicationAt)}
+          {station.reliability.hint ?? "Última comunicação"} · {formatRelativeTime(station.reliability.lastCommunicationAt)}
         </Text>
+        <Text style={styles.updated}>
+          {station.availability.workingConnectors ?? free} funcionando · {station.availability.faultedConnectors ?? 0} em falha · {station.availability.occupiedConnectors} ocupados · {station.availability.reservedConnectors ?? 0} reservados
+        </Text>
+        {station.inMaintenance ? (
+          <Text style={styles.error}>Temporariamente indisponível para manutenção.</Text>
+        ) : null}
+
+        <Pressable
+          disabled={Boolean(busyAction) || !id}
+          onPress={() => void handleWaitlistStation()}
+          style={styles.secondaryCta}
+        >
+          <Text style={styles.secondaryCtaText}>Entrar na fila do primeiro conector compatível</Text>
+        </Pressable>
 
         {selectedVehicle ? (
           <Text style={styles.vehicleHint}>
@@ -254,7 +285,8 @@ export default function StationDetailScreen() {
               />
             </View>
             {charger.connectors.map((connector) => {
-              const canStart = connector.action === "CHARGE";
+              const canStart = connector.action === "CHARGE" && isChargerOnline(charger.status) && !station.inMaintenance;
+              const maintenance = connector.action === "MAINTENANCE" || station.inMaintenance;
               return (
                 <View
                   key={connector.id}
@@ -274,7 +306,9 @@ export default function StationDetailScreen() {
                         ? ` · ${formatCurrency(connector.pricePerKwhCents)}/kWh`
                         : ""}
                     </Text>
-                    {connector.compatible === true ? (
+                    {maintenance ? (
+                      <Text style={styles.bad}>Temporariamente indisponível para manutenção.</Text>
+                    ) : connector.compatible === true ? (
                       <Text style={styles.ok}>✓ Compatível</Text>
                     ) : connector.compatible === false ? (
                       <Text style={styles.bad}>✕ Incompatível</Text>

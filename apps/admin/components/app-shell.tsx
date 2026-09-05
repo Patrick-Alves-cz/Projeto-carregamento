@@ -42,7 +42,9 @@ import { useQuery } from "@/hooks/use-query";
 const NAV = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
   { href: "/dashboard/map", label: "Mapa da rede", icon: Map },
-  { href: "/dashboard/operations", label: "Operação ao vivo", icon: Zap },
+  { href: "/dashboard/operations", label: "Operação", icon: Zap },
+  { href: "/dashboard/incidents", label: "Incidentes", icon: PlugZap },
+  { href: "/dashboard/maintenance", label: "Manutenção", icon: PlugZap },
   { href: "/dashboard/stations", label: "Estações", icon: MapPin },
   { href: "/dashboard/chargers", label: "Carregadores", icon: PlugZap },
   { href: "/dashboard/tariffs", label: "Tarifas", icon: Wallet },

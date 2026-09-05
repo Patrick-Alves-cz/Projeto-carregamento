@@ -26,11 +26,16 @@ export type DomainEventType =
   | "reservation.created"
   | "reservation.cancelled"
   | "waitlist.joined"
-  | "waitlist.notified";
+  | "waitlist.notified"
+  | "incident.opened"
+  | "incident.updated"
+  | "maintenance.started"
+  | "maintenance.ended"
+  | "charger.health.changed";
 
 export interface DomainEvent<TPayload = Record<string, unknown>> {
   type: DomainEventType;
-  entityType: "session" | "charger" | "connector" | "payment" | "reservation" | "waitlist";
+  entityType: "session" | "charger" | "connector" | "payment" | "reservation" | "waitlist" | "incident" | "maintenance";
   entityId: string;
   payload: TPayload;
   timestamp: Date;

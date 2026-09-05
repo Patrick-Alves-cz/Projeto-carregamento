@@ -53,9 +53,9 @@ describe("session status transitions", () => {
     );
   });
 
-  it("allows PENDING → PREPARING → ACTIVE", () => {
-    assert.equal(canTransitionSessionStatus("PENDING", "PREPARING"), true);
-    assert.equal(canTransitionSessionStatus("PREPARING", "ACTIVE"), true);
+  it("allows ACTIVE → CHARGING_COMPLETE → IDLE", () => {
+    assert.equal(canTransitionSessionStatus("ACTIVE", "CHARGING_COMPLETE"), true);
+    assert.equal(canTransitionSessionStatus("CHARGING_COMPLETE", "IDLE"), true);
   });
 
   it("marks terminal states", () => {

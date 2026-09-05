@@ -16,7 +16,10 @@ export class NotFoundError extends DomainError {
 }
 
 export class ValidationError extends DomainError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly driverCode?: string,
+  ) {
     super(message, "VALIDATION_ERROR");
     this.name = "ValidationError";
   }
@@ -51,8 +54,11 @@ export class ConflictError extends DomainError {
 }
 
 export class ConnectorUnavailableError extends DomainError {
-  constructor(message = "Connector is not available for charging") {
-    super(message, "CONNECTOR_UNAVAILABLE");
+  constructor(
+    message = "Connector is not available for charging",
+    public readonly driverCode = "CONNECTOR_UNAVAILABLE",
+  ) {
+    super(message, driverCode);
     this.name = "ConnectorUnavailableError";
   }
 }
