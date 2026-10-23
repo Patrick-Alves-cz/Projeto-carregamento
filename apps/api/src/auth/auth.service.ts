@@ -65,7 +65,7 @@ export class AuthService {
       },
     });
 
-    if (!user || user.status !== UserStatus.ACTIVE) {
+    if (!user || user.status !== UserStatus.ACTIVE || !user.passwordHash) {
       this.audit.warn("auth.login.failure", { email: input.email.toLowerCase() });
       throw new UnauthorizedError("Invalid credentials");
     }
@@ -208,6 +208,110 @@ export class AuthService {
       return { ...generic, resetToken: token };
     }
     return generic;
+  }
+
+  async loginWithGoogle(accessToken: string) {
+    const profile = await this.fetchGoogleProfile(accessToken);
+    const email = profile.email.toLowerCase();
+
+    let user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ googleId: profile.sub }, { email }],
+      },
+      include: {
+        profile: true,
+        companyMembers: { include: { company: true } },
+      },
+    });
+
+    if (user && user.status !== UserStatus.ACTIVE) {
+      this.audit.warn("auth.google.failure", { email, reason: "inactive" });
+      throw new UnauthorizedError("Conta inativa");
+    }
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          googleId: profile.sub,
+          role: UserRole.DRIVER,
+          profile: {
+            create: {
+              fullName: profile.name || email.split("@")[0] || "Motorista Google",
+              avatarUrl: profile.picture,
+            },
+          },
+          wallet: {
+            create: { balanceCents: 10000, currency: "BRL" },
+          },
+        },
+        include: {
+          profile: true,
+          companyMembers: { include: { company: true } },
+        },
+      });
+      this.audit.info("auth.google.register", { userId: user.id, email: user.email });
+    } else if (!user.googleId) {
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          googleId: profile.sub,
+          profile: user.profile
+            ? {
+                update: {
+                  fullName: user.profile.fullName || profile.name || user.email,
+                  avatarUrl: user.profile.avatarUrl || profile.picture,
+                },
+              }
+            : {
+                create: {
+                  fullName: profile.name || email.split("@")[0] || "Motorista Google",
+                  avatarUrl: profile.picture,
+                },
+              },
+        },
+        include: {
+          profile: true,
+          companyMembers: { include: { company: true } },
+        },
+      });
+      this.audit.info("auth.google.link", { userId: user.id, email: user.email });
+    }
+
+    const tokens = await this.issueTokens(user);
+    this.audit.info("auth.google.success", { userId: user.id, email: user.email, role: user.role });
+    return { user: this.sanitizeUser(user), ...tokens };
+  }
+
+  private async fetchGoogleProfile(accessToken: string) {
+    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      sub?: string;
+      email?: string;
+      email_verified?: boolean | string;
+      name?: string;
+      picture?: string;
+      error?: string;
+    };
+
+    if (!res.ok || !data.sub || !data.email) {
+      this.audit.warn("auth.google.failure", { reason: data.error || "invalid_token" });
+      throw new UnauthorizedError("Token Google inválido");
+    }
+
+    const verified = data.email_verified === true || data.email_verified === "true";
+    if (!verified) {
+      throw new UnauthorizedError("E-mail Google não verificado");
+    }
+
+    return {
+      sub: data.sub,
+      email: data.email,
+      name: data.name,
+      picture: data.picture ?? null,
+    };
   }
 
   async resetPassword(token: string, password: string) {

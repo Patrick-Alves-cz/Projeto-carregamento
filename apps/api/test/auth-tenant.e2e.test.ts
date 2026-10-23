@@ -96,6 +96,39 @@ describeIfDb("Auth & Multi-tenant E2E", () => {
     assert.equal(res.body.role, "DRIVER");
   });
 
+  it("login returns operator, admin and super admin roles", async () => {
+    const admin = await request(app.getHttpServer())
+      .post("/api/auth/login")
+      .send({ email: "admin.sp@evcharge.demo", password: "Demo@12345" })
+      .expect(201);
+    assert.equal(admin.body.user.role, "ADMIN");
+
+    const superadmin = await request(app.getHttpServer())
+      .post("/api/auth/login")
+      .send({ email: "superadmin@evcharge.demo", password: "Demo@12345" })
+      .expect(201);
+    assert.equal(superadmin.body.user.role, "SUPER_ADMIN");
+
+    const operator = await request(app.getHttpServer())
+      .get("/api/auth/me")
+      .set("Authorization", `Bearer ${operatorSpToken}`)
+      .expect(200);
+    assert.equal(operator.body.role, "OPERATOR");
+  });
+
+  it("driver cannot execute administrative endpoints", async () => {
+    await request(app.getHttpServer())
+      .post("/api/stations")
+      .set("Authorization", `Bearer ${driverToken}`)
+      .send({
+        name: "Não deve criar",
+        address: "Rua X",
+        latitude: -23.55,
+        longitude: -46.63,
+      })
+      .expect(403);
+  });
+
   it("driver accesses own vehicle", async () => {
     const list = await request(app.getHttpServer())
       .get("/api/vehicles")

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INVITE_ROLES } from "../constants";
+import { strongPasswordSchema } from "./password";
 
 export const createInvitationSchema = z.object({
   email: z.string().email(),
@@ -9,7 +10,7 @@ export const createInvitationSchema = z.object({
 
 export const acceptInvitationSchema = z.object({
   fullName: z.string().min(2).max(200),
-  password: z.string().min(8).max(128),
+  password: strongPasswordSchema,
 });
 
 export type CreateInvitationInput = z.infer<typeof createInvitationSchema>;

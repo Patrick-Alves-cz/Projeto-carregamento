@@ -1,5 +1,3 @@
-import { isAdminPanelRole } from "@evcharge/shared";
-
 const API_URL = "/api/proxy";
 
 export interface AuthUser {
@@ -162,12 +160,40 @@ export async function login(email: string, password: string) {
     credentials: "include",
     body: JSON.stringify({ email, password }),
   });
-  const data = (await res.json().catch(() => ({}))) as { user?: AuthUser; message?: string };
+  const data = (await res.json().catch(() => ({}))) as {
+    user?: AuthUser;
+    redirectTo?: "/app" | "/admin" | "/acesso-negado";
+    message?: string;
+  };
   if (!res.ok) throw new Error(readErrorMessage(data, "Não foi possível entrar"));
-  if (!data.user || !isAdminPanelRole(data.user.role)) {
-    throw new Error("Esta conta não tem acesso ao painel administrativo.");
+  if (!data.user || !data.redirectTo) {
+    throw new Error("Não foi possível identificar o perfil desta conta.");
   }
-  return data;
+  return data as { user: AuthUser; redirectTo: "/app" | "/admin" };
+}
+
+export async function registerDriver(input: {
+  fullName: string;
+  email: string;
+  password: string;
+  phone?: string;
+}) {
+  const res = await fetch("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    user?: AuthUser;
+    redirectTo?: "/app" | "/admin" | "/acesso-negado";
+    message?: string;
+  };
+  if (!res.ok) throw new Error(readErrorMessage(data, "Não foi possível criar a conta"));
+  if (!data.user || !data.redirectTo) {
+    throw new Error("Não foi possível concluir o cadastro.");
+  }
+  return data as { user: AuthUser; redirectTo: "/app" | "/admin" };
 }
 
 export async function logout() {

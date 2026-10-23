@@ -6,8 +6,12 @@ O EV Charge é um monorepo: **Driver**, **Admin** e **API**. A API é também o 
 
 ```mermaid
 flowchart LR
-  Driver[Driver Expo/web] -->|HTTPS + JWT| API
-  Admin[Admin Next.js] -->|BFF cookie + HTTPS| API
+  Browser[Navegador] -->|HTTPS login único| Web[evcharge.com.br]
+  Web -->|DRIVER /app| Driver[Driver Expo web]
+  Web -->|ADMIN /admin| Admin[Admin Next.js]
+  Driver -->|BFF cookie + HTTPS| API
+  Admin -->|BFF cookie + HTTPS| API
+  Native[Driver nativo] -->|HTTPS + JWT| API
   API[EV Charge API] --> PG[(PostgreSQL)]
   Charger[Carregador físico ou simulador] -->|WSS OCPP 1.6J| OCPP[Gateway OCPP na API]
   OCPP --> API

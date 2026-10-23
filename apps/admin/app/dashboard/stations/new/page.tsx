@@ -39,7 +39,7 @@ export default function NewStationPage() {
         amenities: form.amenities.split(",").map((item) => item.trim()).filter(Boolean),
         openingHours: { label: form.openingHours },
       });
-      router.push(`/dashboard/stations/${station.id}`);
+      router.push(`/admin/stations/${station.id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Não foi possível criar");
     } finally {

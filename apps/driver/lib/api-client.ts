@@ -1,8 +1,20 @@
 import { CONNECTOR_TYPE_LABELS, type ConnectorType } from "@evcharge/shared";
+import { Platform } from "react-native";
 import { getItem, removeItem, setItem } from "./storage";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api";
 const AUTH_KEY = "evcharge_auth";
+
+export function isCookieBff(): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  const path = window.location.pathname;
+  const onApp = path === "/app" || path.startsWith("/app/");
+  return onApp && !/:(8081)$/.test(window.location.host);
+}
+
+function apiRoot() {
+  return isCookieBff() ? "/api/proxy" : API_URL;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -198,6 +210,14 @@ function readError(data: unknown, fallback: string, status?: number) {
 let refreshInFlight: Promise<boolean> | null = null;
 
 async function tryRefresh(): Promise<boolean> {
+  if (isCookieBff()) {
+    try {
+      const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
   const tokens = await getStoredTokens();
   if (!tokens?.refreshToken) return false;
   try {
@@ -216,14 +236,18 @@ async function tryRefresh(): Promise<boolean> {
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
-  const tokens = await getStoredTokens();
+  const tokens = isCookieBff() ? null : await getStoredTokens();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
   if (tokens?.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${apiRoot()}${path}`, {
+    ...options,
+    headers,
+    credentials: isCookieBff() ? "include" : options.credentials,
+  });
   const data = await res.json().catch(() => ({}));
   const isPublicAuth = [
     "/auth/login",
@@ -240,7 +264,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
     });
     const refreshed = await refreshInFlight;
     if (refreshed) return apiFetch<T>(path, options, false);
-    await clearTokens();
+    if (!isCookieBff()) await clearTokens();
     throw new ApiError("Sessão expirada. Entre novamente.", "UNAUTHORIZED", 401);
   }
 
@@ -249,6 +273,24 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, retry
 }
 
 export async function login(email: string, password: string) {
+  if (isCookieBff()) {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      user?: AuthUser;
+      redirectTo?: string;
+      message?: string;
+    };
+    if (!res.ok || !data.user) throw readError(data, "Não foi possível entrar", res.status);
+    if (data.redirectTo && typeof window !== "undefined") {
+      window.location.assign(data.redirectTo);
+    }
+    return data as { user: AuthUser; redirectTo?: string };
+  }
   const data = await apiFetch<{ accessToken: string; refreshToken: string; user: AuthUser }>(
     "/auth/login",
     { method: "POST", body: JSON.stringify({ email, password }) },
@@ -263,6 +305,17 @@ export async function register(input: {
   phone?: string;
   password: string;
 }) {
+  if (isCookieBff()) {
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(input),
+    });
+    const data = (await res.json().catch(() => ({}))) as { user?: AuthUser; message?: string };
+    if (!res.ok || !data.user) throw readError(data, "Não foi possível criar a conta", res.status);
+    return data;
+  }
   const data = await apiFetch<{ accessToken: string; refreshToken: string; user: AuthUser }>(
     "/auth/register",
     { method: "POST", body: JSON.stringify({ ...input, role: "DRIVER" }) },
@@ -272,6 +325,11 @@ export async function register(input: {
 }
 
 export async function logout() {
+  if (isCookieBff()) {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+    if (typeof window !== "undefined") window.location.assign("/login");
+    return;
+  }
   const tokens = await getStoredTokens();
   if (tokens?.refreshToken) {
     await apiFetch("/auth/logout", {
@@ -747,13 +805,21 @@ export async function removeFavorite(stationId: string) {
   });
 }
 
-const WS_URL = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api").replace(
-  /\/api$/,
-  "",
-);
+export async function getWsToken() {
+  if (isCookieBff()) {
+    const res = await fetch("/api/auth/ws-token", { credentials: "include" });
+    const data = (await res.json().catch(() => ({}))) as { token?: string };
+    if (!res.ok || !data.token) throw new ApiError("Sessão expirada", "UNAUTHORIZED", 401);
+    return data.token;
+  }
+  const tokens = await getStoredTokens();
+  if (!tokens?.accessToken) throw new ApiError("Sessão expirada", "UNAUTHORIZED", 401);
+  return tokens.accessToken;
+}
 
 export function getRealtimeUrl() {
-  return `${WS_URL}/realtime`;
+  const base = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001/api").replace(/\/api$/, "");
+  return `${base}/realtime`;
 }
 
 export function connectorLabel(type: string) {

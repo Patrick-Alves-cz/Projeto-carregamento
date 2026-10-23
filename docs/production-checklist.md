@@ -4,10 +4,10 @@ Use antes do primeiro carregador físico em campo. Não substitui um pentest.
 
 ## DNS e TLS
 
-- [ ] Domínio próprio
+- [ ] Domínio próprio (`evcharge.com.br` ou equivalente)
+- [ ] Apex A/CNAME no VPS (login `/`, `/app`, `/admin`)
 - [ ] `api.` A/CNAME no VPS
 - [ ] `ocpp.` A/CNAME no **mesmo** VPS
-- [ ] `admin.` e `app.`
 - [ ] HTTPS (Caddy/Let’s Encrypt)
 - [ ] WSS em `wss://ocpp…/ocpp/{identity}` (não `ws://` na rua)
 - [ ] Upgrade WebSocket no proxy (Caddy já faz)
@@ -51,7 +51,7 @@ Use antes do primeiro carregador físico em campo. Não substitui um pentest.
 
 ## Smoke test
 
-- [ ] Login Admin e Driver
+- [ ] Login único (Driver → `/app`, operação → `/admin`)
 - [ ] Estação + charger demo ou físico
 - [ ] Simulador ou equipamento `ocppOnline=true`
 - [ ] Start → MeterValues → Stop → recibo

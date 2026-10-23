@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -10,7 +10,13 @@ import {
   View,
 } from "react-native";
 import { Link, useRouter } from "expo-router";
-import { register } from "../lib/api-client";
+import {
+  isPasswordStrong,
+  PASSWORD_POLICY_MESSAGE,
+  PASSWORD_REQUIREMENTS,
+  passwordRequirementChecks,
+} from "@evcharge/shared";
+import { register, isCookieBff } from "../lib/api-client";
 import { driverErrorMessage } from "../lib/errors";
 import { colors, radius } from "../lib/theme";
 
@@ -22,8 +28,13 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const checks = useMemo(() => passwordRequirementChecks(password), [password]);
 
   async function handleRegister() {
+    if (!isPasswordStrong(password)) {
+      setError(PASSWORD_POLICY_MESSAGE);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -33,6 +44,10 @@ export default function RegisterScreen() {
         phone: phone || undefined,
         password,
       });
+      if (isCookieBff() && typeof window !== "undefined") {
+        window.location.assign("/app");
+        return;
+      }
       router.replace("/onboarding");
     } catch (err: unknown) {
       setError(driverErrorMessage(err));
@@ -48,8 +63,10 @@ export default function RegisterScreen() {
     >
       <ScrollView contentContainerStyle={styles.wrap}>
         <View style={styles.card}>
-          <Text style={styles.title}>Criar conta</Text>
-          <Text style={styles.subtitle}>Somente motoristas. Sem dados desnecessários.</Text>
+          <Text style={styles.title}>Entre ou cadastre-se</Text>
+          <Text style={styles.subtitle}>
+            Cadastro de motorista com e-mail e senha. A senha precisa ter letra e número.
+          </Text>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Text style={styles.label}>Nome completo</Text>
           <TextInput onChangeText={setFullName} style={styles.input} value={fullName} />
@@ -65,7 +82,21 @@ export default function RegisterScreen() {
           <TextInput keyboardType="phone-pad" onChangeText={setPhone} style={styles.input} value={phone} />
           <Text style={styles.label}>Senha</Text>
           <TextInput onChangeText={setPassword} secureTextEntry style={styles.input} value={password} />
-          <Pressable disabled={loading} onPress={() => void handleRegister()} style={styles.button}>
+          <View style={styles.requirements}>
+            {PASSWORD_REQUIREMENTS.map((item) => (
+              <Text
+                key={item.id}
+                style={[styles.requirement, checks[item.id] ? styles.requirementOk : null]}
+              >
+                {checks[item.id] ? "✓" : "○"} {item.label}
+              </Text>
+            ))}
+          </View>
+          <Pressable
+            disabled={loading || !isPasswordStrong(password)}
+            onPress={() => void handleRegister()}
+            style={[styles.button, (!isPasswordStrong(password) || loading) && styles.disabled]}
+          >
             <Text style={styles.buttonText}>{loading ? "Criando…" : "Criar conta"}</Text>
           </Pressable>
           <Link href="/login" style={styles.link}>
@@ -102,6 +133,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
+  requirements: {
+    backgroundColor: colors.cardAlt,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: 6,
+    marginBottom: 12,
+    padding: 12,
+  },
+  requirement: { color: colors.muted, fontSize: 12 },
+  requirementOk: { color: colors.primary },
   button: {
     alignItems: "center",
     backgroundColor: colors.primary,
@@ -110,5 +152,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   buttonText: { color: colors.primaryText, fontSize: 16, fontWeight: "700" },
+  disabled: { opacity: 0.55 },
   link: { color: colors.primary, marginTop: 16, textAlign: "center" },
 });

@@ -70,7 +70,7 @@ export default function ChargersPage() {
 function ChargerRow({ charger }: { charger: Charger }) {
   const ocpp = charger.providerId === "ocpp16" || charger.providerId === "ocpp";
   return (
-    <Link href={`/dashboard/chargers/${charger.id}`}>
+    <Link href={`/admin/chargers/${charger.id}`}>
       <Card className="transition-colors hover:bg-muted/40">
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
           <div>

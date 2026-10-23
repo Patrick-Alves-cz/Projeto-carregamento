@@ -85,7 +85,7 @@ function LiveSessionRow({
           Encerrar
         </Button>
         <Button size="sm" variant="ghost" asChild>
-          <Link href={`/dashboard/operations/${session.id}`}>Detalhe</Link>
+          <Link href={`/admin/operations/${session.id}`}>Detalhe</Link>
         </Button>
       </div>
     </div>

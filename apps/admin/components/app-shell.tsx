@@ -40,25 +40,32 @@ import { cn } from "@/lib/utils";
 import { useQuery } from "@/hooks/use-query";
 
 const NAV = [
-  { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
-  { href: "/dashboard/map", label: "Mapa da rede", icon: Map },
-  { href: "/dashboard/operations", label: "Operação", icon: Zap },
-  { href: "/dashboard/incidents", label: "Incidentes", icon: PlugZap },
-  { href: "/dashboard/maintenance", label: "Manutenção", icon: PlugZap },
-  { href: "/dashboard/stations", label: "Estações", icon: MapPin },
-  { href: "/dashboard/chargers", label: "Carregadores", icon: PlugZap },
-  { href: "/dashboard/tariffs", label: "Tarifas", icon: Wallet },
-  { href: "/dashboard/payments", label: "Pagamentos", icon: Receipt },
-  { href: "/dashboard/finance/reconciliation", label: "Financeiro", icon: Wallet },
-  { href: "/dashboard/payment-methods", label: "Métodos", icon: Wallet },
-  { href: "/dashboard/reservations", label: "Reservas", icon: Users },
-  { href: "/dashboard/waitlist", label: "Fila", icon: Users },
-  { href: "/dashboard/team", label: "Equipe", icon: Users },
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/operations", label: "Operações", icon: Zap },
+  { href: "/admin/stations", label: "Estações", icon: MapPin },
+  { href: "/admin/chargers", label: "Chargers", icon: PlugZap },
+  { href: "/admin/map", label: "Mapa da rede", icon: Map },
+  { href: "/admin/incidents", label: "Incidentes", icon: PlugZap },
+  { href: "/admin/maintenance", label: "Manutenção", icon: PlugZap },
+  { href: "/admin/tariffs", label: "Tarifas", icon: Wallet },
+  { href: "/admin/reservations", label: "Reservas", icon: Users },
+  { href: "/admin/waitlist", label: "Fila", icon: Users },
+  { href: "/admin/payments", label: "Sessões / Pagamentos", icon: Receipt },
+  { href: "/admin/finance/reconciliation", label: "Financeiro", icon: Wallet },
+  { href: "/admin/payment-methods", label: "Métodos", icon: Wallet },
+  { href: "/admin/team", label: "Usuários", icon: Users },
 ];
 
+function canonicalAdminPath(pathname: string) {
+  if (pathname === "/dashboard") return "/admin";
+  if (pathname.startsWith("/dashboard/")) return `/admin/${pathname.slice("/dashboard/".length)}`;
+  return pathname;
+}
+
 function isActive(pathname: string, href: string) {
-  if (href === "/dashboard") return pathname === href;
-  return pathname.startsWith(href);
+  const current = canonicalAdminPath(pathname);
+  if (href === "/admin") return current === href;
+  return current.startsWith(href);
 }
 
 function NavLinks({
@@ -96,7 +103,7 @@ function NavLinks({
 
 function Brand() {
   return (
-    <Link href="/dashboard" className="flex items-center gap-2.5 px-2">
+    <Link href="/admin" className="flex items-center gap-2.5 px-2">
       <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
         <Zap className="size-4" />
       </span>
@@ -200,7 +207,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAdminPanelRole(user.role)) {
-    void handleLogout();
+    if (typeof window !== "undefined") window.location.replace("/acesso-negado");
     return (
       <div className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">
         Redirecionando…

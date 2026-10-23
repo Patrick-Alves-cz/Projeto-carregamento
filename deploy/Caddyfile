@@ -23,12 +23,21 @@
 	import websocket_api
 }
 
-{$ADMIN_HOST} {
+{$WEB_HOST} {
 	encode gzip
-	reverse_proxy admin:3000
-}
-
-{$APP_HOST} {
-	encode gzip
-	reverse_proxy driver:8081
+	@driver path /app /app/*
+	handle @driver {
+		uri strip_prefix /app
+		reverse_proxy driver:8081 {
+			flush_interval -1
+		}
+	}
+	handle /_expo* {
+		reverse_proxy driver:8081 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy admin:3000
+	}
 }

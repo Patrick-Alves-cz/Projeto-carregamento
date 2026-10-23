@@ -13,8 +13,8 @@ Estado atual: **BETA FUNCIONAL**. Mock é o provider padrão de carregador e de 
 Monorepo pnpm + Turborepo.
 
 - `apps/api` — NestJS: REST `/api`, Socket.IO `/realtime`, OCPP `/ocpp/:identity`
-- `apps/admin` — Next.js (cookies httpOnly via BFF)
-- `apps/driver` — Expo (Bearer JWT)
+- `apps/admin` — Next.js: porta de entrada (`/login`), painel (`/admin`), BFF cookies
+- `apps/driver` — Expo: nativo (Bearer) e web em `/app` (mesmos cookies no host único)
 - `apps/charger-simulator` — Charge Point OCPP de laboratório
 - `packages/database` — Prisma 6 + PostgreSQL (Supabase ou Postgres local)
 - `packages/domain` — regras e transições de estado

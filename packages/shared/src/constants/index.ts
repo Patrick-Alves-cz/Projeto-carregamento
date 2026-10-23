@@ -42,6 +42,14 @@ export function isDriverRole(role: string): boolean {
   return role === "DRIVER";
 }
 
+export type PostLoginPath = "/app" | "/admin" | "/acesso-negado";
+
+export function postLoginPath(role: string | null | undefined): PostLoginPath {
+  if (isDriverRole(role ?? "")) return "/app";
+  if (isAdminPanelRole(role ?? "")) return "/admin";
+  return "/acesso-negado";
+}
+
 export const COMPANY_MEMBER_ROLES = ["OWNER", "ADMIN", "OPERATOR", "VIEWER"] as const;
 export type CompanyMemberRole = (typeof COMPANY_MEMBER_ROLES)[number];
 

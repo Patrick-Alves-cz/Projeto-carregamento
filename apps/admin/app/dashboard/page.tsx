@@ -97,7 +97,7 @@ export default function DashboardPage() {
             <CardTitle>Estações</CardTitle>
             <CardDescription>Disponibilidade de conectores por local</CardDescription>
           </div>
-          <Link href="/dashboard/stations" className="text-sm text-primary hover:underline">
+          <Link href="/admin/stations" className="text-sm text-primary hover:underline">
             Ver todas
           </Link>
         </CardHeader>

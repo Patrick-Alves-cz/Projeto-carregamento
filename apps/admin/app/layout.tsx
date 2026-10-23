@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: `${APP_NAME} — Admin`,
-  description: "Painel administrativo da plataforma de recarga de veículos elétricos",
+  title: APP_NAME,
+  description: "Recarga de veículos elétricos — motorista e operação",
 };
 
 export default function RootLayout({

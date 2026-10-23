@@ -1,13 +1,14 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { isPasswordStrong, PASSWORD_POLICY_MESSAGE } from "@evcharge/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordRequirements } from "@/components/password-requirements";
 import { resetPassword } from "@/lib/api-client";
-import { Suspense } from "react";
 
 function ResetForm() {
   const router = useRouter();
@@ -18,6 +19,10 @@ function ResetForm() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!isPasswordStrong(password)) {
+      setError(PASSWORD_POLICY_MESSAGE);
+      return;
+    }
     try {
       await resetPassword(token, password);
       router.push("/login");
@@ -34,10 +39,17 @@ function ResetForm() {
       </div>
       <div className="space-y-2">
         <Label>Nova senha</Label>
-        <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <Input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          minLength={8}
+        />
+        <PasswordRequirements password={password} />
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button className="w-full" type="submit">
+      <Button className="w-full" type="submit" disabled={!isPasswordStrong(password)}>
         Redefinir
       </Button>
     </form>

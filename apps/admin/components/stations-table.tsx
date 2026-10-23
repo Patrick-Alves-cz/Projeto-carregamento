@@ -42,7 +42,7 @@ export function StationsTable({ stations }: { stations: Station[] }) {
           const total = station.availability.totalConnectors;
           const free = station.availability.availableConnectors;
           const pct = total > 0 ? Math.round((free / total) * 100) : 0;
-          const href = `/dashboard/stations/${station.id}`;
+          const href = `/admin/stations/${station.id}`;
           return (
             <TableRow
               key={station.id}

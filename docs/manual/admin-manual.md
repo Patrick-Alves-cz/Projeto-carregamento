@@ -1,8 +1,8 @@
 # Manual do Admin
 
-Painel: `http://localhost:3000` (local) ou `https://admin.seudominio.com`.
+Painel: `http://localhost:3000/admin` depois do login único em `/login`. Produção: `https://evcharge.com.br/admin`.
 
-Login via BFF: cookies `evcharge_access` / `evcharge_refresh` httpOnly. Contas DRIVER são recusadas no painel.
+Login via BFF: cookies `evcharge_access` / `evcharge_refresh` httpOnly. Contas DRIVER que abrirem `/admin` veem acesso negado — a URL não concede permissão.
 
 ## Login
 

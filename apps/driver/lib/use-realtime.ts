@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
-import { getRealtimeUrl, getStoredTokens } from "./api-client";
+import { getRealtimeUrl, getStoredTokens, getWsToken, isCookieBff } from "./api-client";
 
 export function useRealtime(onEvent: (event: { type: string; payload: unknown }) => void) {
   const socketRef = useRef<Socket | null>(null);
@@ -11,11 +11,13 @@ export function useRealtime(onEvent: (event: { type: string; payload: unknown })
     let active = true;
 
     void (async () => {
-      const tokens = await getStoredTokens();
-      if (!tokens?.accessToken || !active) return;
+      const token = isCookieBff()
+        ? await getWsToken()
+        : (await getStoredTokens())?.accessToken;
+      if (!token || !active) return;
 
       const socket = io(getRealtimeUrl(), {
-        auth: { token: tokens.accessToken },
+        auth: { token },
         transports: ["websocket"],
       });
       socketRef.current = socket;

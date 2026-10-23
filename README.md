@@ -15,7 +15,7 @@ Plataforma de recarga de veículos elétricos: motorista, operação, billing e 
 - Carteira, PIX, cartão tokenizado, hold, capture, refund, webhooks
 - Asaas em **SANDBOX** (não use produção até fornecer chave real)
 - Reconciliação financeira e recibos
-- Pronto para publicar o beta na internet (VPS + WSS). **Não há deploy automático**
+- Pronto para publicar o beta na internet (VPS + WSS). Publicação exige VPS com DNS; OCPP não é serverless
 
 OCPP implementado: **1.6J**. OCPP 2.0.1 não faz parte deste beta.
 
@@ -26,8 +26,9 @@ Mapa e lista de estações, início/parada de recarga com evidência do carregad
 ## Arquitetura
 
 ```
-Driver ──HTTPS/JWT──► API NestJS ──► PostgreSQL
-Admin ──HTTPS/cookie BFF──► API
+https://evcharge.com.br/login ──cookies BFF──► API NestJS ──► PostgreSQL
+        ├── DRIVER  → /app
+        └── OPERATOR/ADMIN/SUPER_ADMIN → /admin
 Charge Point ──WSS OCPP 1.6J──► mesmo processo da API (/ocpp/{identity})
 ```
 
@@ -83,11 +84,14 @@ pnpm test
 
 | App | URL |
 |---|---|
+| Porta única (login) | http://localhost:3000 |
+| Login | http://localhost:3000/login |
+| Driver (após login DRIVER) | http://localhost:3000/app |
+| Admin (após login operação) | http://localhost:3000/admin |
 | API | http://localhost:3001/api |
 | Swagger | http://localhost:3001/api/docs |
 | Health | http://localhost:3001/api/health |
-| Admin | http://localhost:3000 |
-| Driver | http://localhost:8081 |
+| Driver nativo / Expo | http://localhost:8081 |
 | OCPP | `ws://localhost:3001/ocpp/EVSE-CUIABA-001` |
 
 Demo: senha `Demo@12345` · `superadmin@evcharge.demo` · `driver1@evcharge.demo` · charger `EVSE-CUIABA-001` (secret de seed `DemoCharger@12345`).
@@ -116,11 +120,11 @@ Admin → Estações → criar charger com `identity` única e `providerId=ocpp1
 
 ## Deploy
 
-Não publicamos em nenhuma conta por você.
+Publicação no VPS (Caddy + Compose). Sem conta/VPS neste repositório o compose não sobe sozinho na internet.
 
 1. VPS + Caddy (`docker-compose.production.yml`)
 2. Postgres que você já usa
-3. Quatro DNS: `api`, `ocpp`, `admin`, `app`
+3. Três DNS: apex (`evcharge.com.br`), `api`, `ocpp`
 4. `.env.production` a partir de `.env.production.example`
 
 Passo a passo: [docs/deploy.md](docs/deploy.md) · checklist: [docs/production-checklist.md](docs/production-checklist.md).

@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { USER_ROLES } from "../constants";
+import { strongPasswordSchema } from "./password";
 
 export const createUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(128),
+  password: strongPasswordSchema,
   role: z.enum(USER_ROLES).default("DRIVER"),
   fullName: z.string().min(2).max(200),
 });

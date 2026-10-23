@@ -14,6 +14,7 @@ import {
   logoutSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  googleLoginSchema,
 } from "@evcharge/shared";
 import { Public } from "../common/decorators/auth.decorators";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
@@ -101,6 +102,24 @@ export class AuthController {
   })
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.me(user.id);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Post("google")
+  @ApiOperation({
+    summary: "Login or register DRIVER with Google access token",
+    description:
+      "Validates the Google access token server-side, then issues EV Charge JWT cookies/tokens.",
+  })
+  async google(
+    @Body(new ZodValidationPipe(googleLoginSchema)) body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { accessToken } = body as { accessToken: string };
+    const result = await this.authService.loginWithGoogle(accessToken);
+    setAuthCookies(res, result);
+    return result;
   }
 
   @Public()

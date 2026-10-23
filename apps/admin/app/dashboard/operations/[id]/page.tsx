@@ -29,7 +29,7 @@ export default function SessionDetailPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <Button variant="ghost" size="sm" asChild>
-        <Link href="/dashboard/operations">Voltar</Link>
+        <Link href="/admin/operations">Voltar</Link>
       </Button>
       <Card>
         <CardHeader>

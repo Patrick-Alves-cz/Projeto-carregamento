@@ -17,13 +17,16 @@ const base = {
 export function applyAuthCookies(
   response: NextResponse,
   tokens: { accessToken: string; refreshToken: string },
+  options?: { secure?: boolean },
 ) {
+  const secure = options?.secure ?? cookieSecure();
+  const opts = { ...base, secure };
   response.cookies.set("evcharge_access", tokens.accessToken, {
-    ...base,
+    ...opts,
     maxAge: 15 * 60,
   });
   response.cookies.set("evcharge_refresh", tokens.refreshToken, {
-    ...base,
+    ...opts,
     maxAge: 7 * 24 * 60 * 60,
   });
 }

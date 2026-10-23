@@ -40,6 +40,24 @@ describe("registerSchema", () => {
     });
     assert.equal(result.success, false);
   });
+
+  it("rejects password without number", () => {
+    const result = registerSchema.safeParse({
+      email: "driver@example.com",
+      password: "OnlyLetters",
+      fullName: "Test Driver",
+    });
+    assert.equal(result.success, false);
+  });
+
+  it("rejects password without letter", () => {
+    const result = registerSchema.safeParse({
+      email: "driver@example.com",
+      password: "12345678",
+      fullName: "Test Driver",
+    });
+    assert.equal(result.success, false);
+  });
 });
 
 describe("walletTopUpSchema", () => {

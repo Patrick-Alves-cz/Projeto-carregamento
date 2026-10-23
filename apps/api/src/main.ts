@@ -6,7 +6,7 @@ import { IoAdapter } from "@nestjs/platform-socket.io";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import { AppModule } from "./app.module";
-import { getAllowedCorsOrigins } from "./common/config/cors-origins";
+import { isAllowedCorsOrigin } from "./common/config/cors-origins";
 import {
   getRequiredJwtAccessSecret,
   getRequiredJwtRefreshSecret,
@@ -28,7 +28,10 @@ async function bootstrap() {
   app.setGlobalPrefix("api");
 
   app.enableCors({
-    origin: getAllowedCorsOrigins(),
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => callback(null, isAllowedCorsOrigin(origin)),
     credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],

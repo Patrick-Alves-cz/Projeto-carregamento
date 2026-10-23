@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAdminPanelRole } from "@evcharge/shared";
+import { postLoginPath } from "@evcharge/shared";
 import { apiBaseUrl, applyAuthCookies } from "@/lib/auth-cookies";
 
 export async function POST(request: NextRequest) {
@@ -20,14 +20,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data, { status: res.status });
   }
 
-  if (!data.user || !isAdminPanelRole(data.user.role) || !data.accessToken || !data.refreshToken) {
-    return NextResponse.json(
-      { message: "Esta conta não tem acesso ao painel administrativo." },
-      { status: 403 },
-    );
+  if (!data.user || !data.accessToken || !data.refreshToken) {
+    return NextResponse.json({ message: "Não foi possível autenticar." }, { status: 401 });
   }
 
-  const response = NextResponse.json({ user: data.user });
+  const redirectTo = postLoginPath(data.user.role);
+  if (redirectTo === "/acesso-negado") {
+    return NextResponse.json({ message: "Esta conta não tem acesso ao EV Charge." }, { status: 403 });
+  }
+
+  const response = NextResponse.json({ user: data.user, redirectTo });
   applyAuthCookies(response, {
     accessToken: data.accessToken,
     refreshToken: data.refreshToken,

@@ -38,7 +38,7 @@ export default function StationsPage() {
             </p>
           </div>
           <Button asChild>
-            <Link href="/dashboard/stations/new">Nova estação</Link>
+            <Link href="/admin/stations/new">Nova estação</Link>
           </Button>
         </div>
         <Tabs value={filter} onValueChange={(value) => setFilter(value as typeof filter)}>

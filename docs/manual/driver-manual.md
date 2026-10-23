@@ -1,13 +1,14 @@
 # Manual do motorista (Driver)
 
-App: Expo em `http://localhost:8081` (web) ou cliente nativo. API: Bearer JWT.
+App web: `http://localhost:3000/app` depois do login único em `/login`. Cliente nativo: Expo. No web unificado a sessão é cookie httpOnly (BFF). No nativo: Bearer JWT.
 
 Contas demo: `driver1@evcharge.demo` … `driver5@evcharge.demo` / senha `Demo@12345` (só desenvolvimento).
 
 ## Cadastro e login
 
-1. Abra o Driver → criar conta (somente papel motorista) ou entrar.
-2. Tokens ficam no dispositivo (Secure Store / storage web). Refresh é automático.
+1. Abra `http://localhost:3000` → `/login` (não escolha “Driver” ou “Admin”).
+2. Conta DRIVER vai para `/app`. Operação vai para `/admin`.
+3. No app nativo, tokens ficam no dispositivo (Secure Store). Refresh é automático.
 
 ## Veículo
 

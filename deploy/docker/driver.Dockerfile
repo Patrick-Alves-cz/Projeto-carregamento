@@ -8,4 +8,4 @@ RUN pnpm install --frozen-lockfile
 ENV EXPO_NO_TELEMETRY=1
 EXPOSE 8081
 WORKDIR /app/apps/driver
-CMD ["pnpm", "exec", "expo", "start", "--web", "--host", "lan", "--port", "8081", "--non-interactive"]
+CMD ["sh", "-c", "EXPO_BASE_URL=/app pnpm exec expo start --web --host lan --port 8081 --non-interactive"]

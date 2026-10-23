@@ -2,10 +2,12 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { isPasswordStrong, PASSWORD_POLICY_MESSAGE } from "@evcharge/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordRequirements } from "@/components/password-requirements";
 import { acceptInvitation, previewInvitation } from "@/lib/api-client";
 
 export default function InvitePage() {
@@ -28,6 +30,10 @@ export default function InvitePage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!isPasswordStrong(password)) {
+      setError(PASSWORD_POLICY_MESSAGE);
+      return;
+    }
     try {
       await acceptInvitation(params.token, { fullName, password });
       router.push("/login");
@@ -53,10 +59,17 @@ export default function InvitePage() {
             </div>
             <div className="space-y-2">
               <Label>Senha</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+              />
+              <PasswordRequirements password={password} />
             </div>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            <Button className="w-full" type="submit">
+            <Button className="w-full" type="submit" disabled={!isPasswordStrong(password)}>
               Criar conta
             </Button>
           </form>

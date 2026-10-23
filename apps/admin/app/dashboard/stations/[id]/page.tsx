@@ -48,7 +48,7 @@ export default function StationDetailPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-4">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/dashboard/stations">
+          <Link href="/admin/stations">
             <ArrowLeft />
             Estações
           </Link>
@@ -66,7 +66,7 @@ export default function StationDetailPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <Button variant="ghost" size="sm" asChild>
-        <Link href="/dashboard/stations">
+        <Link href="/admin/stations">
           <ArrowLeft />
           Estações
         </Link>

@@ -61,7 +61,7 @@ export default function ChargerDetailPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-4">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/dashboard/chargers">
+          <Link href="/admin/chargers">
             <ArrowLeft />
             Carregadores
           </Link>
@@ -77,7 +77,7 @@ export default function ChargerDetailPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <Button variant="ghost" size="sm" asChild>
-        <Link href="/dashboard/chargers">
+        <Link href="/admin/chargers">
           <ArrowLeft />
           Carregadores
         </Link>

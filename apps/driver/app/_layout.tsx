@@ -2,8 +2,8 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import { View } from "react-native";
-import { getMe, getStoredTokens, listVehicles, logout } from "../lib/api-client";
-import { isDriverRole } from "@evcharge/shared";
+import { isAdminPanelRole, isDriverRole } from "@evcharge/shared";
+import { getMe, getStoredTokens, isCookieBff, listVehicles, logout } from "../lib/api-client";
 import { colors } from "../lib/theme";
 
 export default function RootLayout() {
@@ -13,20 +13,56 @@ export default function RootLayout() {
 
   useEffect(() => {
     async function checkAuth() {
-      const tokens = await getStoredTokens();
-      const inApp = segments[0] === "(app)";
-      const inOnboarding = segments[0] === "onboarding";
-      if (!tokens && (inApp || inOnboarding)) {
-        router.replace("/login");
-        setReady(true);
-        return;
-      }
       const first = String(segments[0] ?? "");
+      const inApp = first === "(app)";
+      const inOnboarding = first === "onboarding";
       const publicAuth =
         first === "login" ||
         first === "register" ||
         first === "forgot-password" ||
         first === "reset-password";
+
+      if (isCookieBff()) {
+        if (first === "login" || first === "forgot-password" || first === "reset-password") {
+          if (typeof window !== "undefined") window.location.replace("/login");
+          return;
+        }
+        try {
+          const me = await getMe();
+          if (isAdminPanelRole(me.role)) {
+            if (typeof window !== "undefined") window.location.replace("/admin");
+            return;
+          }
+          if (!isDriverRole(me.role)) {
+            if (typeof window !== "undefined") window.location.replace("/acesso-negado");
+            return;
+          }
+          const vehicles = await listVehicles().catch(() => []);
+          const needsOnboarding = vehicles.length === 0;
+          if (needsOnboarding && !inOnboarding) {
+            router.replace("/onboarding");
+            setReady(true);
+            return;
+          }
+          if (!needsOnboarding && (publicAuth || inOnboarding)) {
+            router.replace("/(app)/(tabs)");
+          }
+        } catch {
+          if (first !== "register") {
+            if (typeof window !== "undefined") window.location.replace("/login");
+            return;
+          }
+        }
+        setReady(true);
+        return;
+      }
+
+      const tokens = await getStoredTokens();
+      if (!tokens && (inApp || inOnboarding)) {
+        router.replace("/login");
+        setReady(true);
+        return;
+      }
       if (tokens) {
         try {
           const me = await getMe();
@@ -38,7 +74,7 @@ export default function RootLayout() {
           }
           const vehicles = await listVehicles().catch(() => []);
           const needsOnboarding = vehicles.length === 0;
-          if (needsOnboarding && segments[0] !== "onboarding") {
+          if (needsOnboarding && !inOnboarding) {
             router.replace("/onboarding");
             setReady(true);
             return;

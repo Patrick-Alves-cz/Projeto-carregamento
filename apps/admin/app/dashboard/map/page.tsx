@@ -34,7 +34,7 @@ export default function NetworkMapPage() {
               Carregando mapa…
             </div>
           ) : (
-            <NetworkMap stations={stations} onSelect={(id) => router.push(`/dashboard/stations/${id}`)} />
+            <NetworkMap stations={stations} onSelect={(id) => router.push(`/admin/stations/${id}`)} />
           )}
         </div>
         <aside className="border-t lg:border-l lg:border-t-0">
@@ -43,7 +43,7 @@ export default function NetworkMapPage() {
               <button
                 key={station.id}
                 type="button"
-                onClick={() => router.push(`/dashboard/stations/${station.id}`)}
+                onClick={() => router.push(`/admin/stations/${station.id}`)}
                 className="w-full rounded-lg border px-3 py-3 text-left hover:bg-accent"
               >
                 <div className="flex items-start justify-between gap-2">
